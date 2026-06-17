@@ -47,6 +47,8 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 9px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .profile-item {
@@ -167,6 +169,21 @@ button:disabled {
   background: #d9d0bf;
 }
 
+.rail-footer {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.rail-footer small {
+  color: #bac6bd;
+}
+
+.token-button {
+  width: 100%;
+  background: #35433f;
+}
+
 .chat-panel {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
@@ -215,6 +232,36 @@ button:disabled {
   padding: 22px;
   background: #f8f2e7;
   box-shadow: 0 24px 80px rgba(17, 28, 27, 0.35);
+}
+
+.token-modal {
+  width: min(560px, 100%);
+}
+
+.token-list {
+  display: grid;
+  gap: 10px;
+}
+
+.token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.row-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  color: #17211b;
+  background: #d9d0bf;
+}
+
+h2 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1;
 }
 
 .modal-close {

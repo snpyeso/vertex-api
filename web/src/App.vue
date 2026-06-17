@@ -4,10 +4,13 @@ import { defaultConfig } from './defaultConfig.js';
 
 const storageKey = 'gemini-openai-proxy-profiles';
 const activeProfileIdKey = 'gemini-openai-proxy-active-profile';
+const tokenStorageKey = 'gemini-openai-proxy-api-tokens';
 
 const profiles = ref([]);
 const activeProfileId = ref('');
 const editingProfileId = ref('');
+const tokenEditorOpen = ref(false);
+const apiTokens = ref([]);
 const model = ref('');
 const models = ref([]);
 const input = ref('Reply exactly: active config works');
@@ -60,13 +63,30 @@ function loadProfiles() {
     : profiles.value[0].id;
 }
 
+function loadTokens() {
+  const stored = localStorage.getItem(tokenStorageKey) || '';
+  try {
+    const parsed = JSON.parse(stored);
+    apiTokens.value = Array.isArray(parsed) ? parsed : splitLines(stored);
+  } catch {
+    apiTokens.value = splitLines(stored);
+  }
+}
+
+function saveTokensLocal() {
+  localStorage.setItem(tokenStorageKey, JSON.stringify(apiTokens.value));
+}
+
 function saveProfiles() {
   localStorage.setItem(storageKey, JSON.stringify(profiles.value));
   localStorage.setItem(activeProfileIdKey, activeProfileId.value);
 }
 
 function requestBody(profile) {
+  const apiKeys = normalizedTokens();
   return {
+    requireApiKey: apiKeys.length > 0,
+    apiKeys,
     vertex: {
       projectId: profile.projectId.trim(),
       location: profile.location.trim() || 'global',
@@ -126,6 +146,41 @@ function closeEditor() {
   editingProfileId.value = '';
 }
 
+function openTokenEditor() {
+  if (apiTokens.value.length === 0) {
+    apiTokens.value = [''];
+  }
+  tokenEditorOpen.value = true;
+}
+
+function closeTokenEditor() {
+  tokenEditorOpen.value = false;
+}
+
+async function saveTokens() {
+  apiTokens.value = normalizedTokens();
+  saveTokensLocal();
+  tokenEditorOpen.value = false;
+  if (activeProfile.value?.projectId.trim() && activeProfile.value?.clientEmail.trim() && activeProfile.value?.privateKey.trim()) {
+    await saveConfig();
+  }
+}
+
+function addTokenRow() {
+  apiTokens.value.push('');
+}
+
+function removeTokenRow(index) {
+  apiTokens.value.splice(index, 1);
+  if (apiTokens.value.length === 0) {
+    apiTokens.value.push('');
+  }
+}
+
+function clearTokens() {
+  apiTokens.value = [];
+}
+
 async function deleteProfile(profileId) {
   if (profiles.value.length <= 1) return;
   const index = profiles.value.findIndex((profile) => profile.id === profileId);
@@ -146,7 +201,7 @@ async function loadServerConfig() {
 }
 
 async function loadModels() {
-  const response = await fetch('/v1/models');
+  const response = await fetch('/v1/models', { headers: authHeaders() });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || 'Failed to load models');
   models.value = payload.data.map((item) => item.id);
@@ -165,7 +220,7 @@ async function send() {
   try {
     const response = await fetch('/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         model: model.value,
         messages: messages.value
@@ -181,6 +236,15 @@ async function send() {
   }
 }
 
+function authHeaders() {
+  const token = normalizedTokens()[0];
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function normalizedTokens() {
+  return apiTokens.value.map((token) => String(token).trim()).filter(Boolean);
+}
+
 function splitLines(value) {
   return String(value || '')
     .split(/\r?\n|,/)
@@ -190,6 +254,7 @@ function splitLines(value) {
 
 onMounted(async () => {
   loadProfiles();
+  loadTokens();
   await loadServerConfig();
   if (activeProfile.value?.projectId.trim() && activeProfile.value?.clientEmail.trim() && activeProfile.value?.privateKey.trim()) {
     await saveConfig();
@@ -227,6 +292,13 @@ onMounted(async () => {
             Del
           </button>
         </article>
+      </div>
+
+      <div class="rail-footer">
+        <button type="button" class="token-button" @click="openTokenEditor">
+          Tokens
+        </button>
+        <small>{{ normalizedTokens().length || 'No' }} token{{ normalizedTokens().length === 1 ? '' : 's' }}</small>
       </div>
     </aside>
 
@@ -305,6 +377,32 @@ onMounted(async () => {
           <button type="button" :disabled="!canSave || saving" @click="saveConfig">
             {{ saving ? 'Enabling' : 'Enable config' }}
           </button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="tokenEditorOpen" class="modal-layer" @click.self="closeTokenEditor">
+      <section class="config-modal token-modal">
+        <button type="button" class="modal-close" aria-label="Close token settings" @click="closeTokenEditor">x</button>
+        <div class="brand-row">
+          <div>
+            <h2>API Tokens</h2>
+            <p>{{ normalizedTokens().length ? 'API access requires any one listed token.' : 'No tokens means API access is open.' }}</p>
+          </div>
+          <button type="button" class="ghost-button" @click="closeTokenEditor">Close</button>
+        </div>
+
+        <div class="token-list">
+          <div v-for="(_token, index) in apiTokens" :key="index" class="token-row">
+            <input v-model="apiTokens[index]" autocomplete="off" placeholder="token value" />
+            <button type="button" class="row-button" @click="removeTokenRow(index)">-</button>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="ghost-button" @click="clearTokens">Clear</button>
+          <button type="button" class="ghost-button" @click="addTokenRow">+ Add row</button>
+          <button type="button" @click="saveTokens">Save tokens</button>
         </div>
       </section>
     </div>
