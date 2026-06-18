@@ -2,6 +2,9 @@ import crypto from 'node:crypto';
 
 const VERTEX_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token';
+const DEFAULT_RETRY_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 1000;
+const RETRY_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 export class VertexClient {
   constructor(vertexConfig) {
@@ -11,20 +14,11 @@ export class VertexClient {
 
   async generateContent(model, body) {
     const endpoint = this.buildEndpoint(model, 'generateContent');
-    const token = await this.getAccessToken();
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
-
+    const response = await this.fetchVertex(endpoint, body);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const message = payload.error?.message || response.statusText;
-      const error = new Error(`Vertex AI request failed: ${message}`);
+      const error = new Error(`Vertex AI request failed: ${friendlyVertexMessage(response.status, message)}`);
       error.status = response.status;
       error.details = payload;
       throw error;
@@ -35,26 +29,44 @@ export class VertexClient {
 
   async *streamGenerateContent(model, body) {
     const endpoint = `${this.buildEndpoint(model, 'streamGenerateContent')}?alt=sse`;
-    const token = await this.getAccessToken();
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
+    const response = await this.fetchVertex(endpoint, body);
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       const message = payload.error?.message || response.statusText;
-      const error = new Error(`Vertex AI stream request failed: ${message}`);
+      const error = new Error(`Vertex AI stream request failed: ${friendlyVertexMessage(response.status, message)}`);
       error.status = response.status;
       error.details = payload;
       throw error;
     }
 
     yield* parseSseStream(response.body);
+  }
+
+  async fetchVertex(endpoint, body) {
+    const maxRetries = retryAttempts();
+    let lastResponse = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const token = await this.getAccessToken();
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!shouldRetry(response, attempt, maxRetries)) {
+        return response;
+      }
+
+      lastResponse = response;
+      await sleep(retryDelayMs(response, attempt));
+    }
+
+    return lastResponse;
   }
 
   buildEndpoint(model, method) {
@@ -116,6 +128,41 @@ export class VertexClient {
     }
     return `${unsigned}.${base64Url(signature)}`;
   }
+}
+
+function retryAttempts() {
+  const value = Number(process.env.VERTEX_RETRY_ATTEMPTS ?? DEFAULT_RETRY_ATTEMPTS);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function shouldRetry(response, attempt, maxRetries) {
+  return attempt < maxRetries && RETRY_STATUS_CODES.has(response.status);
+}
+
+function retryDelayMs(response, attempt) {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+
+    const dateMs = Date.parse(retryAfter);
+    if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  }
+
+  const baseDelay = Number(process.env.VERTEX_RETRY_DELAY_MS ?? DEFAULT_RETRY_DELAY_MS);
+  const delay = Number.isFinite(baseDelay) && baseDelay > 0 ? baseDelay : DEFAULT_RETRY_DELAY_MS;
+  return delay * 2 ** attempt;
+}
+
+function friendlyVertexMessage(status, message) {
+  if (status === 429) {
+    return `${message} Retried automatically but Vertex AI quota/rate limit is still exhausted. Reduce request rate, switch model/location, or request a higher quota in Google Cloud.`;
+  }
+  return message;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function* parseSseStream(body) {

@@ -51,6 +51,17 @@ Open `http://localhost:3100`. The default profile is prefilled from the old `api
 
 Local data is stored in `data/app.db`.
 
+## Vertex Rate Limits
+
+Vertex AI can return `429 Resource has been exhausted` when requests are too frequent or quota is low. The proxy retries transient Vertex errors automatically. Optional tuning:
+
+```bash
+VERTEX_RETRY_ATTEMPTS=3
+VERTEX_RETRY_DELAY_MS=1000
+```
+
+If 429 errors continue after retries, reduce concurrency/request rate, use another model or region, or increase quota in Google Cloud.
+
 ## Login
 
 Default management account:
