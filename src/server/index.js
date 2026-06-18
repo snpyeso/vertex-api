@@ -313,6 +313,14 @@ async function streamOpenAiResponse(res, model, stream) {
 
   setSseHeaders(res);
   const heartbeat = startSseHeartbeat(res);
+  writeSseData(res, {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }]
+  });
+  sentRole = true;
 
   try {
     for await (const geminiChunk of stream) {
@@ -518,12 +526,15 @@ function setSseHeaders(res) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.socket?.setNoDelay?.(true);
   res.flushHeaders?.();
 }
 
 function writeSseData(res, data) {
   if (res.destroyed || res.writableEnded) return false;
-  return res.write(`data: ${JSON.stringify(data)}\n\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  return true;
 }
 
 function writeSseEvent(res, event, data) {
