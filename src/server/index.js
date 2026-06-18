@@ -345,6 +345,7 @@ function restoreMissingThoughtSignatures(vertexBody) {
 async function streamOpenAiResponse(res, model, stream) {
   const id = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
+  const strategy = createOpenAiStreamStrategy();
   let sentRole = false;
   let finished = false;
 
@@ -384,8 +385,8 @@ async function streamOpenAiResponse(res, model, stream) {
         })) break;
       }
 
-      for (const [index, call] of chunk.functionCalls.entries()) {
-        const toolCallId = `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`;
+      for (const call of chunk.functionCalls) {
+        const { index, toolCallId } = strategy.nextToolCall(call);
         rememberToolCallSignature(toolCallId, call.thoughtSignature, call.name);
         if (!writeSseData(res, {
           id,
@@ -425,7 +426,7 @@ async function streamOpenAiResponse(res, model, stream) {
           object: 'chat.completion.chunk',
           created,
           model,
-          choices: [{ index: 0, delta: {}, finish_reason: chunk.functionCalls.length ? 'tool_calls' : chunk.finishReason }]
+          choices: [{ index: 0, delta: {}, finish_reason: strategy.finishReason(chunk.finishReason) }]
         })) break;
         finished = true;
       }
@@ -455,11 +456,31 @@ async function streamOpenAiResponse(res, model, stream) {
   }
 }
 
+function createOpenAiStreamStrategy() {
+  let toolCallIndex = 0;
+  let sawToolCall = false;
+
+  return {
+    nextToolCall() {
+      sawToolCall = true;
+      const index = toolCallIndex;
+      toolCallIndex += 1;
+      return {
+        index,
+        toolCallId: `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`
+      };
+    },
+    finishReason(reason) {
+      return sawToolCall ? 'tool_calls' : reason;
+    }
+  };
+}
+
 async function streamAnthropicResponse(res, model, stream) {
   const id = `msg_${crypto.randomUUID().replaceAll('-', '')}`;
+  const strategy = createAnthropicStreamStrategy();
   let contentIndex = 0;
   let textBlockOpen = false;
-  let stopReason = 'end_turn';
 
   setSseHeaders(res);
   const heartbeat = startSseHeartbeat(res, 'anthropic');
@@ -525,11 +546,11 @@ async function streamAnthropicResponse(res, model, stream) {
         })) break;
         if (!writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex })) break;
         contentIndex += 1;
-        stopReason = 'tool_use';
+        strategy.didToolUse();
       }
 
-      if (chunk.finishReason && stopReason !== 'tool_use') {
-        stopReason = chunk.finishReason;
+      if (chunk.finishReason) {
+        strategy.didFinish(chunk.finishReason);
       }
     }
 
@@ -539,7 +560,7 @@ async function streamAnthropicResponse(res, model, stream) {
     if (!res.destroyed && !res.writableEnded) {
       writeSseEvent(res, 'message_delta', {
         type: 'message_delta',
-        delta: { stop_reason: stopReason, stop_sequence: null },
+        delta: { stop_reason: strategy.stopReason(), stop_sequence: null },
         usage: { output_tokens: 0 }
       });
       writeSseEvent(res, 'message_stop', { type: 'message_stop' });
@@ -556,6 +577,22 @@ async function streamAnthropicResponse(res, model, stream) {
   } finally {
     clearInterval(heartbeat);
   }
+}
+
+function createAnthropicStreamStrategy() {
+  let stopReason = 'end_turn';
+
+  return {
+    didToolUse() {
+      stopReason = 'tool_use';
+    },
+    didFinish(reason) {
+      if (stopReason !== 'tool_use') stopReason = reason;
+    },
+    stopReason() {
+      return stopReason;
+    }
+  };
 }
 
 function setSseHeaders(res) {
