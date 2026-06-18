@@ -1,9 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
-$repo = 'C:\Users\Axzo\Documents\gemini-CG'
-$node = 'C:\nvm4w\nodejs\node.exe'
+$repo = 'C:\Users\Axzo\Documents\vertex-api'
+$npm = 'C:\nvm4w\nodejs\npm.cmd'
 
+$env:HOST = '0.0.0.0'
 $env:PORT = '3100'
 Set-Location $repo
 
-& $node --no-warnings "$repo\src\server\index.js" *> "$repo\server.log"
+& $npm run dev *> "$repo\server.log"
