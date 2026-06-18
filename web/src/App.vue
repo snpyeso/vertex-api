@@ -255,6 +255,7 @@ onMounted(checkSession);
   <main v-if="!authenticated" class="login-shell">
     <form class="login-panel" @submit.prevent="login">
       <h1>Vertex Bridge</h1>
+      <p class="login-hint">Default account: admin / 123456. Please change it after login.</p>
       <label>
         Username
         <input v-model="loginUsername" autocomplete="username" />
