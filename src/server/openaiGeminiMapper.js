@@ -30,6 +30,24 @@ function parseToolArguments(args) {
   }
 }
 
+function readThoughtSignature(value) {
+  return (
+    value?.extra_content?.google?.thought_signature ||
+    value?.extra_content?.google?.thoughtSignature ||
+    value?.thoughtSignature ||
+    value?.thought_signature ||
+    value?.function?.thoughtSignature ||
+    value?.function?.thought_signature ||
+    ''
+  );
+}
+
+function functionCallPart(functionCall, thoughtSignature) {
+  const part = { functionCall };
+  if (thoughtSignature) part.thoughtSignature = thoughtSignature;
+  return part;
+}
+
 export function openAiToGemini(request, modelOverrides = {}) {
   const systemTexts = [];
   const contents = [];
@@ -50,12 +68,15 @@ export function openAiToGemini(request, modelOverrides = {}) {
       for (const toolCall of message.tool_calls || []) {
         if (toolCall.type !== 'function') continue;
         if (toolCall.id) toolCallNames.set(toolCall.id, toolCall.function.name);
-        parts.push({
-          functionCall: {
+        parts.push(
+          functionCallPart(
+            {
             name: toolCall.function.name,
             args: parseToolArguments(toolCall.function.arguments)
-          }
-        });
+            },
+            readThoughtSignature(toolCall)
+          )
+        );
       }
 
       if (parts.length > 0) {
@@ -151,8 +172,8 @@ export function geminiToOpenAi(gemini, requestModel) {
   const parts = candidate.content?.parts || [];
   const visibleParts = parts.filter((part) => !part.thought);
   const text = visibleParts.map((part) => part.text).filter(Boolean).join('');
-  const functionCalls = visibleParts.map((part) => part.functionCall).filter(Boolean);
-  const hasToolCalls = functionCalls.length > 0;
+  const functionCallParts = visibleParts.filter((part) => part.functionCall);
+  const hasToolCalls = functionCallParts.length > 0;
 
   return {
     id: `chatcmpl-${crypto.randomUUID()}`,
@@ -166,12 +187,17 @@ export function geminiToOpenAi(gemini, requestModel) {
           role: 'assistant',
           content: text || null,
           tool_calls: hasToolCalls
-            ? functionCalls.map((call, index) => ({
+            ? functionCallParts.map((part, index) => ({
                 id: `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`,
                 type: 'function',
+                extra_content: part.thoughtSignature ? { google: { thought_signature: part.thoughtSignature } } : undefined,
+                thought_signature: part.thoughtSignature,
+                thoughtSignature: part.thoughtSignature,
                 function: {
-                  name: call.name,
-                  arguments: JSON.stringify(call.args || {})
+                  name: part.functionCall.name,
+                  arguments: JSON.stringify(part.functionCall.args || {}),
+                  thought_signature: part.thoughtSignature,
+                  thoughtSignature: part.thoughtSignature
                 }
               }))
             : undefined
@@ -192,7 +218,13 @@ export function geminiChunkParts(gemini) {
   const parts = (candidate.content?.parts || []).filter((part) => !part.thought);
   return {
     text: parts.map((part) => part.text).filter(Boolean).join(''),
-    functionCalls: parts.map((part) => part.functionCall).filter(Boolean),
+    functionCalls: parts
+      .filter((part) => part.functionCall)
+      .map((part) => ({
+        ...part.functionCall,
+        thoughtSignature: part.thoughtSignature,
+        thought_signature: part.thoughtSignature
+      })),
     finishReason: candidate.finishReason ? mapFinishReason(candidate.finishReason) : null
   };
 }

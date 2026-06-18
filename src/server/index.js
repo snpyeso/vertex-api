@@ -255,9 +255,14 @@ async function streamOpenAiResponse(res, model, stream) {
                     index,
                     id: `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`,
                     type: 'function',
+                    extra_content: call.thoughtSignature ? { google: { thought_signature: call.thoughtSignature } } : undefined,
+                    thought_signature: call.thoughtSignature,
+                    thoughtSignature: call.thoughtSignature,
                     function: {
                       name: call.name,
-                      arguments: JSON.stringify(call.args || {})
+                      arguments: JSON.stringify(call.args || {}),
+                      thought_signature: call.thoughtSignature,
+                      thoughtSignature: call.thoughtSignature
                     }
                   }
                 ]
@@ -352,7 +357,9 @@ async function streamAnthropicResponse(res, model, stream) {
             type: 'tool_use',
             id: `toolu_${crypto.randomUUID().replaceAll('-', '')}`,
             name: call.name,
-            input: {}
+            input: {},
+            thought_signature: call.thoughtSignature,
+            thoughtSignature: call.thoughtSignature
           }
         });
         writeSseEvent(res, 'content_block_delta', {

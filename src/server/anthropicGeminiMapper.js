@@ -30,6 +30,16 @@ function parseToolResultContent(content) {
   return content || {};
 }
 
+function readThoughtSignature(value) {
+  return value?.thoughtSignature || value?.thought_signature || '';
+}
+
+function functionCallPart(functionCall, thoughtSignature) {
+  const part = { functionCall };
+  if (thoughtSignature) part.thoughtSignature = thoughtSignature;
+  return part;
+}
+
 export function anthropicToGemini(request, modelOverrides = {}) {
   const contents = [];
   const toolUseNames = new Map();
@@ -43,12 +53,15 @@ export function anthropicToGemini(request, modelOverrides = {}) {
       for (const item of Array.isArray(message.content) ? message.content : []) {
         if (item.type !== 'tool_use') continue;
         toolUseNames.set(item.id, item.name);
-        parts.push({
-          functionCall: {
-            name: item.name,
-            args: item.input || {}
-          }
-        });
+        parts.push(
+          functionCallPart(
+            {
+              name: item.name,
+              args: item.input || {}
+            },
+            readThoughtSignature(item)
+          )
+        );
       }
 
       if (parts.length > 0) contents.push({ role: 'model', parts });
@@ -141,7 +154,9 @@ export function geminiToAnthropic(gemini, requestModel) {
         type: 'tool_use',
         id: `toolu_${crypto.randomUUID().replaceAll('-', '')}`,
         name: part.functionCall.name,
-        input: part.functionCall.args || {}
+        input: part.functionCall.args || {},
+        thought_signature: part.thoughtSignature,
+        thoughtSignature: part.thoughtSignature
       });
     }
   }
@@ -166,7 +181,13 @@ export function geminiChunkParts(gemini) {
   const parts = (candidate.content?.parts || []).filter((part) => !part.thought);
   return {
     text: parts.map((part) => part.text).filter(Boolean).join(''),
-    functionCalls: parts.map((part) => part.functionCall).filter(Boolean),
+    functionCalls: parts
+      .filter((part) => part.functionCall)
+      .map((part) => ({
+        ...part.functionCall,
+        thoughtSignature: part.thoughtSignature,
+        thought_signature: part.thoughtSignature
+      })),
     finishReason: candidate.finishReason ? mapStopReason(candidate.finishReason) : null
   };
 }
