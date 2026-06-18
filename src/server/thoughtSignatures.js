@@ -1,4 +1,5 @@
 const MAX_SIGNATURES = 1000;
+export const THOUGHT_SIGNATURE_BYPASS = 'context_engineering_is_the_way_to_go';
 const toolCallSignatures = new Map();
 const toolNameSignatures = new Map();
 

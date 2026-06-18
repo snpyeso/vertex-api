@@ -9,7 +9,7 @@ import { anthropicToGemini, geminiChunkParts as anthropicChunkParts, geminiToAnt
 import { geminiChunkParts as openAiChunkParts, openAiToGemini, geminiToOpenAi } from './openaiGeminiMapper.js';
 import { VertexClient } from './vertexClient.js';
 import { configureProxy, getCurrentProxyUrl } from './proxy.js';
-import { rememberToolCallSignature } from './thoughtSignatures.js';
+import { rememberToolCallSignature, THOUGHT_SIGNATURE_BYPASS } from './thoughtSignatures.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '../..');
@@ -312,10 +312,8 @@ function restoreMissingThoughtSignatures(vertexBody) {
     for (const part of content.parts || []) {
       if (!part.functionCall || part.thoughtSignature) continue;
       const signature = database.findRecentThoughtSignature(part.functionCall.name);
-      if (signature) {
-        part.thoughtSignature = signature;
-        rememberToolCallSignature('', signature, part.functionCall.name);
-      }
+      part.thoughtSignature = signature || THOUGHT_SIGNATURE_BYPASS;
+      rememberToolCallSignature('', part.thoughtSignature, part.functionCall.name);
     }
   }
 }

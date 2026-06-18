@@ -1,5 +1,5 @@
 import { sanitizeGeminiSchema } from './schema.js';
-import { getToolCallSignature, getToolNameSignature, rememberToolCallSignature } from './thoughtSignatures.js';
+import { getToolCallSignature, getToolNameSignature, rememberToolCallSignature, THOUGHT_SIGNATURE_BYPASS } from './thoughtSignatures.js';
 
 function textFromAnthropicContent(content) {
   if (typeof content === 'string') return content;
@@ -37,7 +37,7 @@ function readThoughtSignature(value) {
 
 function functionCallPart(functionCall, thoughtSignature) {
   const part = { functionCall };
-  if (thoughtSignature) part.thoughtSignature = thoughtSignature;
+  part.thoughtSignature = thoughtSignature || THOUGHT_SIGNATURE_BYPASS;
   return part;
 }
 
