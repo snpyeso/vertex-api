@@ -15,6 +15,24 @@ textarea {
   font: inherit;
 }
 
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  display: grid;
+  gap: 16px;
+  width: min(360px, 100%);
+  border: 1px solid #d1c5af;
+  border-radius: 8px;
+  padding: 24px;
+  background: #fffaf0;
+  box-shadow: 0 24px 80px rgba(17, 28, 27, 0.14);
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
@@ -191,12 +209,30 @@ button:disabled {
   padding: 24px;
 }
 
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
 .baseurl-hint {
   margin-bottom: 14px;
   border: 1px solid #d1c5af;
   border-radius: 8px;
   padding: 10px 12px;
   background: #fffaf0;
+}
+
+.account-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.account-box span {
+  font-weight: 700;
 }
 
 .baseurl-hint div {
@@ -248,6 +284,10 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) 40px;
   gap: 8px;
   align-items: center;
+}
+
+.token-row-with-profile {
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 220px) 40px;
 }
 
 .row-button {
@@ -332,6 +372,11 @@ h2 {
 
 @media (max-width: 760px) {
   .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar,
+  .token-row-with-profile {
     grid-template-columns: 1fr;
   }
 }

@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyRuntimeConfig, assertApiKey, assertConfigured, createRuntimeConfig, publicConfig } from './config.js';
+import { createDatabase } from './db.js';
 import { anthropicToGemini, geminiChunkParts as anthropicChunkParts, geminiToAnthropic } from './anthropicGeminiMapper.js';
 import { geminiChunkParts as openAiChunkParts, openAiToGemini, geminiToOpenAi } from './openaiGeminiMapper.js';
 import { VertexClient } from './vertexClient.js';
@@ -11,14 +12,17 @@ import { configureProxy, getCurrentProxyUrl } from './proxy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '../..');
+const database = createDatabase(rootDir);
 const config = createRuntimeConfig();
 let proxyUrl = configureProxy();
 let vertexClient = null;
+const vertexClients = new Map();
 const app = express();
 const port = Number(process.env.PORT || 3100);
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+loadActiveRuntimeConfig();
 
 app.get('/health', (_req, res) => {
   res.json({
@@ -33,11 +37,90 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/config', (_req, res) => {
+app.post('/auth/login', (req, res, next) => {
+  try {
+    const username = String(req.body.username || '');
+    const password = String(req.body.password || '');
+    if (!database.verifyPassword(username, password)) {
+      return res.status(401).json({ error: { message: 'Invalid username or password' } });
+    }
+
+    const session = database.createSession(username);
+    setSessionCookie(res, session.token, session.expiresAt);
+    res.json({ ok: true, user: { username } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/auth/session', (req, res) => {
+  const session = database.getSession(readSessionCookie(req));
+  res.json({ authenticated: Boolean(session), user: session ? { username: session.username } : null });
+});
+
+app.post('/auth/logout', (req, res) => {
+  const token = readSessionCookie(req);
+  if (token) database.deleteSession(token);
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.post('/auth/password', requireUiAuth, (req, res) => {
+  const currentPassword = String(req.body.currentPassword || '');
+  const newPassword = String(req.body.newPassword || '');
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: { message: 'New password must be at least 6 characters' } });
+  }
+  if (!database.verifyPassword(req.user.username, currentPassword)) {
+    return res.status(401).json({ error: { message: 'Current password is incorrect' } });
+  }
+  database.changePassword(req.user.username, newPassword);
+  clearSessionCookie(res);
+  res.json({ ok: true, relogin: true });
+});
+
+app.get('/app/state', requireUiAuth, (_req, res) => {
+  res.json(database.getState());
+});
+
+app.post('/app/profiles', requireUiAuth, (req, res) => {
+  const profile = database.saveProfile(req.body);
+  res.json({ profile, state: database.getState() });
+});
+
+app.put('/app/profiles/:id', requireUiAuth, (req, res) => {
+  const profile = database.saveProfile({ ...req.body, id: req.params.id });
+  if (database.getSetting('active_profile_id') === profile.id) loadActiveRuntimeConfig();
+  res.json({ profile, state: database.getState() });
+});
+
+app.delete('/app/profiles/:id', requireUiAuth, (req, res) => {
+  database.deleteProfile(req.params.id);
+  loadActiveRuntimeConfig();
+  res.json({ ok: true, state: database.getState() });
+});
+
+app.post('/app/active-profile', requireUiAuth, (req, res, next) => {
+  try {
+    database.setActiveProfile(req.body.id);
+    loadActiveRuntimeConfig();
+    res.json({ ok: true, config: publicConfig(config), state: database.getState() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/app/tokens', requireUiAuth, (req, res) => {
+  database.replaceTokens(req.body.tokens || []);
+  loadActiveRuntimeConfig();
+  res.json({ ok: true, config: publicConfig(config), state: database.getState() });
+});
+
+app.get('/config', requireUiAuth, (_req, res) => {
   res.json(publicConfig(config));
 });
 
-app.post('/config', (req, res, next) => {
+app.post('/config', requireUiAuth, (req, res, next) => {
   try {
     applyRuntimeConfig(config, req.body);
     proxyUrl = configureProxy(req.body.proxyUrl);
@@ -54,11 +137,10 @@ app.post('/config', (req, res, next) => {
 
 app.get('/v1/models', (req, res, next) => {
   try {
-    assertConfigured(config);
-    assertApiKey(config, req.headers.authorization);
+    const context = getRequestContext(req, req.headers.authorization);
     res.json({
       object: 'list',
-      data: config.vertex.models.map((model) => ({
+      data: context.vertex.models.map((model) => ({
         id: model,
         object: 'model',
         created: 0,
@@ -72,11 +154,10 @@ app.get('/v1/models', (req, res, next) => {
 
 app.post('/v1/chat/completions', async (req, res, next) => {
   try {
-    assertConfigured(config);
-    assertApiKey(config, req.headers.authorization);
+    const context = getRequestContext(req, req.headers.authorization);
 
-    const model = req.body.model || config.vertex.models[0];
-    if (!config.vertex.models.includes(model)) {
+    const model = req.body.model || context.vertex.models[0];
+    if (!context.vertex.models.includes(model)) {
       return res.status(400).json({
         error: {
           message: `Model '${model}' is not configured`,
@@ -85,13 +166,13 @@ app.post('/v1/chat/completions', async (req, res, next) => {
       });
     }
 
-    const overrides = config.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
+    const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = openAiToGemini(req.body, overrides);
     if (req.body.stream) {
-      return streamOpenAiResponse(res, model, vertexClient.streamGenerateContent(model, vertexBody));
+      return streamOpenAiResponse(res, model, context.client.streamGenerateContent(model, vertexBody));
     }
 
-    const vertexResponse = await vertexClient.generateContent(model, vertexBody);
+    const vertexResponse = await context.client.generateContent(model, vertexBody);
     res.json(geminiToOpenAi(vertexResponse, model));
   } catch (error) {
     next(error);
@@ -100,11 +181,10 @@ app.post('/v1/chat/completions', async (req, res, next) => {
 
 app.post('/v1/messages', async (req, res, next) => {
   try {
-    assertConfigured(config);
-    assertApiKey(config, req.headers.authorization || req.headers['x-api-key']);
+    const context = getRequestContext(req, req.headers.authorization || req.headers['x-api-key']);
 
-    const model = req.body.model || config.vertex.models[0];
-    if (!config.vertex.models.includes(model)) {
+    const model = req.body.model || context.vertex.models[0];
+    if (!context.vertex.models.includes(model)) {
       return res.status(400).json({
         type: 'error',
         error: {
@@ -114,13 +194,13 @@ app.post('/v1/messages', async (req, res, next) => {
       });
     }
 
-    const overrides = config.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
+    const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = anthropicToGemini(req.body, overrides);
     if (req.body.stream) {
-      return streamAnthropicResponse(res, model, vertexClient.streamGenerateContent(model, vertexBody));
+      return streamAnthropicResponse(res, model, context.client.streamGenerateContent(model, vertexBody));
     }
 
-    const vertexResponse = await vertexClient.generateContent(model, vertexBody);
+    const vertexResponse = await context.client.generateContent(model, vertexBody);
     res.json(geminiToAnthropic(vertexResponse, model));
   } catch (error) {
     next(error);
@@ -323,6 +403,97 @@ function writeSseData(res, data) {
 function writeSseEvent(res, event, data) {
   res.write(`event: ${event}\n`);
   writeSseData(res, data);
+}
+
+function loadActiveRuntimeConfig() {
+  const activeProfile = database.getActiveProfile();
+  if (!activeProfile) return;
+
+  const tokens = database.listTokens();
+  applyRuntimeConfig(config, {
+    requireApiKey: tokens.length > 0,
+    apiKeys: tokens.map((token) => ({ value: token.value, profileId: token.profileId })),
+    vertex: profileToVertexInput(activeProfile)
+  });
+  vertexClient = getVertexClient(activeProfile);
+}
+
+function getRequestContext(_req, authorization) {
+  assertConfigured(config);
+  const profileId = assertApiKey(config, authorization);
+  const profile = profileId ? database.getProfile(profileId) : database.getActiveProfile();
+  if (!profile) {
+    return { vertex: config.vertex, client: vertexClient };
+  }
+
+  return {
+    vertex: profileToRuntimeVertex(profile),
+    client: getVertexClient(profile)
+  };
+}
+
+function getVertexClient(profile) {
+  const cacheKey = profile.id;
+  if (!vertexClients.has(cacheKey)) {
+    vertexClients.set(cacheKey, new VertexClient(profileToRuntimeVertex(profile)));
+  }
+  return vertexClients.get(cacheKey);
+}
+
+function profileToVertexInput(profile) {
+  return {
+    projectId: profile.projectId,
+    location: profile.location,
+    clientEmail: profile.clientEmail,
+    privateKey: profile.privateKey,
+    models: splitLines(profile.modelsText)
+  };
+}
+
+function profileToRuntimeVertex(profile) {
+  const runtime = createRuntimeConfig();
+  applyRuntimeConfig(runtime, { vertex: profileToVertexInput(profile) });
+  return runtime.vertex;
+}
+
+function requireUiAuth(req, res, next) {
+  const session = database.getSession(readSessionCookie(req));
+  if (!session) {
+    return res.status(401).json({ error: { message: 'Login required' } });
+  }
+  req.user = { username: session.username };
+  next();
+}
+
+function readSessionCookie(req) {
+  const cookies = Object.fromEntries(
+    String(req.headers.cookie || '')
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const index = part.indexOf('=');
+        return index === -1 ? [part, ''] : [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+      })
+  );
+  return cookies.gemini_proxy_session || '';
+}
+
+function setSessionCookie(res, token, expiresAt) {
+  res.setHeader('Set-Cookie', [
+    `gemini_proxy_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}`
+  ]);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', ['gemini_proxy_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0']);
+}
+
+function splitLines(value) {
+  return String(value || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 const webDist = path.join(rootDir, 'web/dist');

@@ -11,6 +11,7 @@ export function createRuntimeConfig() {
     configured: false,
     requireApiKey: false,
     apiKeys: new Set(),
+    apiKeyProfiles: new Map(),
     vertex: null
   };
 }
@@ -21,7 +22,12 @@ export function applyRuntimeConfig(config, input) {
 
   config.configured = true;
   config.requireApiKey = Boolean(input?.requireApiKey);
-  config.apiKeys = new Set(apiKeys.map((key) => key.trim()).filter(Boolean));
+  config.apiKeys = new Set(apiKeys.map((key) => tokenValue(key)).filter(Boolean));
+  config.apiKeyProfiles = new Map(
+    apiKeys
+      .map((key) => [tokenValue(key), typeof key === 'object' ? key.profileId || '' : ''])
+      .filter(([value]) => value)
+  );
   config.vertex = vertex;
 
   return config;
@@ -68,6 +74,8 @@ export function assertApiKey(config, authorization) {
     error.status = 401;
     throw error;
   }
+
+  return config.apiKeyProfiles.get(token) || null;
 }
 
 function normalizeVertexConfig(input) {
@@ -113,4 +121,8 @@ function splitLines(value) {
     .split(/\r?\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function tokenValue(key) {
+  return String(typeof key === 'object' ? key.value || '' : key || '').trim();
 }

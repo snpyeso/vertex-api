@@ -1,14 +1,18 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
-import { defaultConfig } from './defaultConfig.js';
 
-const storageKey = 'gemini-openai-proxy-profiles';
-const activeProfileIdKey = 'gemini-openai-proxy-active-profile';
-const tokenStorageKey = 'gemini-openai-proxy-api-tokens';
+const authenticated = ref(false);
+const username = ref('');
+const loginUsername = ref('admin');
+const loginPassword = ref('');
+const loginError = ref('');
+const passwordModalOpen = ref(false);
+const currentPassword = ref('');
+const newPassword = ref('');
 
 const profiles = ref([]);
 const activeProfileId = ref('');
-const editingProfileId = ref('');
+const editingDraft = ref(null);
 const tokenEditorOpen = ref(false);
 const apiTokens = ref([]);
 const model = ref('');
@@ -22,19 +26,93 @@ const status = ref('Not configured');
 const error = ref('');
 
 const activeProfile = computed(() => profiles.value.find((profile) => profile.id === activeProfileId.value));
-const editingProfile = computed(() => profiles.value.find((profile) => profile.id === editingProfileId.value));
 const baseOrigin = computed(() => window.location.origin);
 const canSave = computed(() =>
-  editingProfile.value?.projectId.trim() &&
-  editingProfile.value?.clientEmail.trim() &&
-  editingProfile.value?.privateKey.trim()
+  editingDraft.value?.projectId.trim() &&
+  editingDraft.value?.clientEmail.trim() &&
+  editingDraft.value?.privateKey.trim()
 );
 const canSend = computed(() => configured.value && input.value.trim() && model.value && !busy.value);
 
-function createProfile(index, base = {}) {
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: 'include',
+    ...options,
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error?.message || 'Request failed');
+  return payload;
+}
+
+async function checkSession() {
+  const payload = await api('/auth/session');
+  authenticated.value = payload.authenticated;
+  username.value = payload.user?.username || '';
+  if (authenticated.value) await loadState();
+}
+
+async function login() {
+  loginError.value = '';
+  try {
+    const payload = await api('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: loginUsername.value, password: loginPassword.value })
+    });
+    authenticated.value = true;
+    username.value = payload.user.username;
+    loginPassword.value = '';
+    await loadState();
+  } catch (caught) {
+    loginError.value = caught.message;
+  }
+}
+
+async function logout() {
+  await api('/auth/logout', { method: 'POST' });
+  authenticated.value = false;
+  username.value = '';
+  profiles.value = [];
+  apiTokens.value = [];
+}
+
+async function changePassword() {
+  try {
+    await api('/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword: currentPassword.value, newPassword: newPassword.value })
+    });
+    passwordModalOpen.value = false;
+    currentPassword.value = '';
+    newPassword.value = '';
+    authenticated.value = false;
+    loginPassword.value = '';
+  } catch (caught) {
+    error.value = caught.message;
+  }
+}
+
+async function loadState() {
+  const state = await api('/app/state');
+  profiles.value = state.profiles || [];
+  activeProfileId.value = state.activeProfileId || profiles.value[0]?.id || '';
+  apiTokens.value = (state.tokens || []).map((token) => ({
+    id: token.id,
+    value: token.value,
+    profileId: token.profileId || profiles.value[0]?.id || ''
+  }));
+  configured.value = Boolean(activeProfileId.value);
+  status.value = configured.value ? `Active: ${activeProfile.value?.name || 'Config'}` : 'Not configured';
+  if (configured.value) await loadModels();
+}
+
+function createDraft(base = {}) {
   return {
-    id: crypto.randomUUID(),
-    name: `Config ${index}`,
+    id: base.id || '',
+    name: base.name || `Config ${profiles.value.length + 1}`,
     projectId: base.projectId || '',
     location: base.location || 'global',
     clientEmail: base.clientEmail || '',
@@ -43,113 +121,61 @@ function createProfile(index, base = {}) {
   };
 }
 
-function loadProfiles() {
-  const storedProfiles = localStorage.getItem(storageKey);
-  if (storedProfiles) {
-    try {
-      profiles.value = JSON.parse(storedProfiles);
-    } catch {
-      localStorage.removeItem(storageKey);
-    }
-  }
-
-  if (profiles.value.length === 0) {
-    profiles.value = [createProfile(1, defaultConfig)];
-  }
-
-  const storedActiveId = localStorage.getItem(activeProfileIdKey);
-  activeProfileId.value = profiles.value.some((profile) => profile.id === storedActiveId)
-    ? storedActiveId
-    : profiles.value[0].id;
+function addProfile() {
+  editingDraft.value = createDraft(activeProfile.value || {});
+  editingDraft.value.id = '';
+  editingDraft.value.name = `Config ${profiles.value.length + 1}`;
 }
 
-function loadTokens() {
-  const stored = localStorage.getItem(tokenStorageKey) || '';
-  try {
-    const parsed = JSON.parse(stored);
-    apiTokens.value = Array.isArray(parsed) ? parsed : splitLines(stored);
-  } catch {
-    apiTokens.value = splitLines(stored);
-  }
+function editProfile(profileId) {
+  const profile = profiles.value.find((item) => item.id === profileId);
+  if (profile) editingDraft.value = createDraft(profile);
 }
 
-function saveTokensLocal() {
-  localStorage.setItem(tokenStorageKey, JSON.stringify(apiTokens.value));
+function closeEditor() {
+  editingDraft.value = null;
 }
 
-function saveProfiles() {
-  localStorage.setItem(storageKey, JSON.stringify(profiles.value));
-  localStorage.setItem(activeProfileIdKey, activeProfileId.value);
-}
-
-function requestBody(profile) {
-  const apiKeys = normalizedTokens();
-  return {
-    requireApiKey: apiKeys.length > 0,
-    apiKeys,
-    vertex: {
-      projectId: profile.projectId.trim(),
-      location: profile.location.trim() || 'global',
-      clientEmail: profile.clientEmail.trim(),
-      privateKey: profile.privateKey.trim(),
-      models: splitLines(profile.modelsText)
-    }
-  };
-}
-
-async function activateProfile(profileId = activeProfileId.value) {
-  activeProfileId.value = profileId;
-  saveProfiles();
-  await saveConfig();
-}
-
-async function saveConfig() {
-  const profile = editingProfile.value || activeProfile.value;
-  if (!profile?.projectId.trim() || !profile?.clientEmail.trim() || !profile?.privateKey.trim()) return;
+async function saveProfile(enableAfterSave = false) {
+  if (!canSave.value) return;
   saving.value = true;
-  error.value = '';
-
   try {
-    activeProfileId.value = profile.id;
-    const response = await fetch('/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody(profile))
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error?.message || 'Failed to save config');
-    configured.value = true;
-    status.value = `Active: ${profile.name}`;
-    editingProfileId.value = '';
-    saveProfiles();
-    await loadModels();
+    const path = editingDraft.value.id ? `/app/profiles/${editingDraft.value.id}` : '/app/profiles';
+    const method = editingDraft.value.id ? 'PUT' : 'POST';
+    const payload = await api(path, { method, body: JSON.stringify(editingDraft.value) });
+    profiles.value = payload.state.profiles;
+    activeProfileId.value = payload.state.activeProfileId;
+    const savedId = payload.profile.id;
+    if (enableAfterSave || !editingDraft.value.id) await activateProfile(savedId);
+    editingDraft.value = null;
   } catch (caught) {
     error.value = caught.message;
-    status.value = 'Config failed';
   } finally {
     saving.value = false;
   }
 }
 
-function addProfile() {
-  const nextProfile = createProfile(profiles.value.length + 1, activeProfile.value || defaultConfig);
-  profiles.value.push(nextProfile);
-  editingProfileId.value = nextProfile.id;
-  saveProfiles();
+async function activateProfile(profileId) {
+  const payload = await api('/app/active-profile', {
+    method: 'POST',
+    body: JSON.stringify({ id: profileId })
+  });
+  profiles.value = payload.state.profiles;
+  activeProfileId.value = payload.state.activeProfileId;
+  configured.value = true;
+  status.value = `Active: ${activeProfile.value?.name || 'Config'}`;
+  await loadModels();
 }
 
-function editProfile(profileId) {
-  editingProfileId.value = profileId;
-}
-
-function closeEditor() {
-  editingProfileId.value = '';
+async function deleteProfile(profileId) {
+  const payload = await api(`/app/profiles/${profileId}`, { method: 'DELETE' });
+  profiles.value = payload.state.profiles;
+  activeProfileId.value = payload.state.activeProfileId;
+  await loadModels();
 }
 
 function openTokenEditor() {
-  if (apiTokens.value.length === 0) {
-    apiTokens.value = [''];
-  }
+  if (apiTokens.value.length === 0) addTokenRow();
   tokenEditorOpen.value = true;
 }
 
@@ -157,47 +183,27 @@ function closeTokenEditor() {
   tokenEditorOpen.value = false;
 }
 
-async function saveTokens() {
-  apiTokens.value = normalizedTokens();
-  saveTokensLocal();
-  tokenEditorOpen.value = false;
-  if (activeProfile.value?.projectId.trim() && activeProfile.value?.clientEmail.trim() && activeProfile.value?.privateKey.trim()) {
-    await saveConfig();
-  }
-}
-
 function addTokenRow() {
-  apiTokens.value.push('');
+  apiTokens.value.push({ id: crypto.randomUUID(), value: '', profileId: profiles.value[0]?.id || '' });
 }
 
 function removeTokenRow(index) {
   apiTokens.value.splice(index, 1);
-  if (apiTokens.value.length === 0) {
-    apiTokens.value.push('');
-  }
+  if (apiTokens.value.length === 0) addTokenRow();
 }
 
 function clearTokens() {
   apiTokens.value = [];
 }
 
-async function deleteProfile(profileId) {
-  if (profiles.value.length <= 1) return;
-  const index = profiles.value.findIndex((profile) => profile.id === profileId);
-  profiles.value = profiles.value.filter((profile) => profile.id !== profileId);
-  if (activeProfileId.value === profileId) {
-    activeProfileId.value = profiles.value[Math.max(0, index - 1)].id;
-    await activateProfile(activeProfileId.value);
-  } else {
-    saveProfiles();
-  }
-}
-
-async function loadServerConfig() {
-  const response = await fetch('/config');
-  const payload = await response.json();
-  configured.value = Boolean(payload.configured);
-  status.value = payload.configured ? `Active: ${activeProfile.value?.name || 'Config'}` : 'Not configured';
+async function saveTokens() {
+  const tokens = apiTokens.value
+    .map((token) => ({ ...token, value: String(token.value || '').trim(), profileId: token.profileId || profiles.value[0]?.id || '' }))
+    .filter((token) => token.value);
+  const payload = await api('/app/tokens', { method: 'PUT', body: JSON.stringify({ tokens }) });
+  apiTokens.value = payload.state.tokens.map((token) => ({ ...token, profileId: token.profileId || profiles.value[0]?.id || '' }));
+  tokenEditorOpen.value = false;
+  await loadModels();
 }
 
 async function loadModels() {
@@ -221,10 +227,7 @@ async function send() {
     const response = await fetch('/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({
-        model: model.value,
-        messages: messages.value
-      })
+      body: JSON.stringify({ model: model.value, messages: messages.value })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error?.message || 'Request failed');
@@ -237,33 +240,35 @@ async function send() {
 }
 
 function authHeaders() {
-  const token = normalizedTokens()[0];
+  const token = normalizedTokens()[0]?.value;
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function normalizedTokens() {
-  return apiTokens.value.map((token) => String(token).trim()).filter(Boolean);
+  return apiTokens.value.filter((token) => String(token.value || '').trim());
 }
 
-function splitLines(value) {
-  return String(value || '')
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-onMounted(async () => {
-  loadProfiles();
-  loadTokens();
-  await loadServerConfig();
-  if (activeProfile.value?.projectId.trim() && activeProfile.value?.clientEmail.trim() && activeProfile.value?.privateKey.trim()) {
-    await saveConfig();
-  }
-});
+onMounted(checkSession);
 </script>
 
 <template>
-  <main class="app-shell">
+  <main v-if="!authenticated" class="login-shell">
+    <form class="login-panel" @submit.prevent="login">
+      <h1>Vertex Bridge</h1>
+      <label>
+        Username
+        <input v-model="loginUsername" autocomplete="username" />
+      </label>
+      <label>
+        Password
+        <input v-model="loginPassword" autocomplete="current-password" type="password" />
+      </label>
+      <p v-if="loginError" class="error">{{ loginError }}</p>
+      <button type="submit">Login</button>
+    </form>
+  </main>
+
+  <main v-else class="app-shell">
     <aside class="profile-rail">
       <div class="rail-head">
         <h1>Vertex Bridge</h1>
@@ -280,34 +285,30 @@ onMounted(async () => {
             <span>{{ profile.name }}</span>
             <small>{{ profile.projectId || 'No project' }}</small>
           </button>
-          <button type="button" class="profile-edit" @click="editProfile(profile.id)">
-            Edit
-          </button>
-          <button
-            type="button"
-            class="profile-delete"
-            :disabled="profiles.length <= 1"
-            @click="deleteProfile(profile.id)"
-          >
-            Del
-          </button>
+          <button type="button" class="profile-edit" @click="editProfile(profile.id)">Edit</button>
+          <button type="button" class="profile-delete" :disabled="profiles.length <= 1" @click="deleteProfile(profile.id)">Del</button>
         </article>
       </div>
 
       <div class="rail-footer">
-        <button type="button" class="token-button" @click="openTokenEditor">
-          Tokens
-        </button>
+        <button type="button" class="token-button" @click="openTokenEditor">Tokens</button>
         <small>{{ normalizedTokens().length || 'No' }} token{{ normalizedTokens().length === 1 ? '' : 's' }}</small>
       </div>
     </aside>
 
     <section class="chat-panel">
-      <div class="baseurl-hint">
-        <div>
-          <strong>Base URLs</strong>
-          <span>OpenAI: {{ baseOrigin }}/v1</span>
-          <span>Anthropic: {{ baseOrigin }}</span>
+      <div class="topbar">
+        <div class="baseurl-hint">
+          <div>
+            <strong>Base URLs</strong>
+            <span>OpenAI: {{ baseOrigin }}/v1</span>
+            <span>Anthropic: {{ baseOrigin }}</span>
+          </div>
+        </div>
+        <div class="account-box">
+          <span>{{ username }}</span>
+          <button type="button" class="ghost-button" @click="passwordModalOpen = true">Password</button>
+          <button type="button" class="ghost-button" @click="logout">Logout</button>
         </div>
       </div>
 
@@ -335,13 +336,13 @@ onMounted(async () => {
       </form>
     </section>
 
-    <div v-if="editingProfile" class="modal-layer" @click.self="closeEditor">
+    <div v-if="editingDraft" class="modal-layer" @click.self="closeEditor">
       <section class="config-modal">
         <button type="button" class="modal-close" aria-label="Close config" @click="closeEditor">x</button>
         <div class="brand-row">
           <div>
-            <input v-model="editingProfile.name" class="profile-name" />
-            <p>{{ editingProfile.id === activeProfileId ? status : 'Inactive' }}</p>
+            <input v-model="editingDraft.name" class="profile-name" />
+            <p>{{ editingDraft.id === activeProfileId ? status : 'Inactive' }}</p>
           </div>
           <button type="button" class="ghost-button" @click="closeEditor">Close</button>
         </div>
@@ -349,33 +350,33 @@ onMounted(async () => {
         <div class="form-grid">
           <label>
             Project ID
-            <input v-model="editingProfile.projectId" autocomplete="off" placeholder="ai-wait" />
+            <input v-model="editingDraft.projectId" autocomplete="off" placeholder="ai-wait" />
           </label>
           <label>
             Location
-            <input v-model="editingProfile.location" autocomplete="off" placeholder="global" />
+            <input v-model="editingDraft.location" autocomplete="off" placeholder="global" />
           </label>
         </div>
 
         <label>
           Client email
-          <input v-model="editingProfile.clientEmail" autocomplete="off" placeholder="service-account@project.iam.gserviceaccount.com" />
+          <input v-model="editingDraft.clientEmail" autocomplete="off" placeholder="service-account@project.iam.gserviceaccount.com" />
         </label>
 
         <label>
           Private key
-          <textarea v-model="editingProfile.privateKey" class="key-field" rows="8" placeholder="-----BEGIN PRIVATE KEY-----" />
+          <textarea v-model="editingDraft.privateKey" class="key-field" rows="8" placeholder="-----BEGIN PRIVATE KEY-----" />
         </label>
 
         <label>
           Models
-          <textarea v-model="editingProfile.modelsText" rows="5" />
+          <textarea v-model="editingDraft.modelsText" rows="5" />
         </label>
 
         <div class="modal-actions">
-          <button type="button" class="ghost-button" @click="saveProfiles">Save local</button>
-          <button type="button" :disabled="!canSave || saving" @click="saveConfig">
-            {{ saving ? 'Enabling' : 'Enable config' }}
+          <button type="button" class="ghost-button" :disabled="!canSave || saving" @click="saveProfile(false)">Save</button>
+          <button type="button" :disabled="!canSave || saving" @click="saveProfile(true)">
+            {{ saving ? 'Saving' : 'Save and enable' }}
           </button>
         </div>
       </section>
@@ -393,8 +394,11 @@ onMounted(async () => {
         </div>
 
         <div class="token-list">
-          <div v-for="(_token, index) in apiTokens" :key="index" class="token-row">
-            <input v-model="apiTokens[index]" autocomplete="off" placeholder="token value" />
+          <div v-for="(_token, index) in apiTokens" :key="apiTokens[index].id || index" class="token-row token-row-with-profile">
+            <input v-model="apiTokens[index].value" autocomplete="off" placeholder="token value" />
+            <select v-model="apiTokens[index].profileId">
+              <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+            </select>
             <button type="button" class="row-button" @click="removeTokenRow(index)">-</button>
           </div>
         </div>
@@ -403,6 +407,30 @@ onMounted(async () => {
           <button type="button" class="ghost-button" @click="clearTokens">Clear</button>
           <button type="button" class="ghost-button" @click="addTokenRow">+ Add row</button>
           <button type="button" @click="saveTokens">Save tokens</button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="passwordModalOpen" class="modal-layer" @click.self="passwordModalOpen = false">
+      <section class="config-modal token-modal">
+        <button type="button" class="modal-close" aria-label="Close password settings" @click="passwordModalOpen = false">x</button>
+        <div class="brand-row">
+          <div>
+            <h2>Change Password</h2>
+            <p>Password change requires login again.</p>
+          </div>
+          <button type="button" class="ghost-button" @click="passwordModalOpen = false">Close</button>
+        </div>
+        <label>
+          Current password
+          <input v-model="currentPassword" type="password" autocomplete="current-password" />
+        </label>
+        <label>
+          New password
+          <input v-model="newPassword" type="password" autocomplete="new-password" />
+        </label>
+        <div class="modal-actions">
+          <button type="button" @click="changePassword">Save password</button>
         </div>
       </section>
     </div>

@@ -4,8 +4,11 @@ This project exposes Vertex AI Gemini as an OpenAI Chat Completions compatible l
 
 ## Features
 
-- Browser-based Vertex AI configuration. No YAML file is required.
+- SQLite-backed Vertex AI configuration. No YAML file is required.
 - Multiple local config profiles. Enable, add, and delete profiles from the left rail.
+- Admin login for the management UI. Default account: `admin` / `123456`.
+- 30-day login session.
+- API tokens can be bound to specific config profiles. If no API tokens exist, API access is open.
 - `GET /health`
 - `GET /config`
 - `POST /config`
@@ -31,6 +34,19 @@ For OpenAI streaming, add `"stream": true` to the request body.
 
 Open `http://localhost:3100`. The default profile is prefilled from the old `api.yaml` values.
 
+Local data is stored in `data/app.db`.
+
+## Login
+
+Default management account:
+
+```text
+admin
+123456
+```
+
+Use the top-right `Password` button to change the password. Changing the password clears sessions and requires login again.
+
 ## Minimal Profile Fields
 
 - Profile name
@@ -41,6 +57,21 @@ Open `http://localhost:3100`. The default profile is prefilled from the old `api
 - Model list, one per line
 
 Proxy handling and request preferences are automatic. They are not page-level settings.
+
+## API Tokens
+
+Open `Tokens` from the left rail. Each token row has:
+
+- Token value
+- Config profile selector
+
+When at least one token exists, API calls must include:
+
+```http
+Authorization: Bearer <token>
+```
+
+Any listed token is accepted. The selected config profile for that token is used for the request. If the token list is empty, API calls do not require authorization.
 
 ## Base URLs
 
