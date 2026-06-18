@@ -1,4 +1,5 @@
 import { sanitizeGeminiSchema } from './schema.js';
+import { getToolCallSignature, rememberToolCallSignature } from './thoughtSignatures.js';
 
 function textFromAnthropicContent(content) {
   if (typeof content === 'string') return content;
@@ -31,13 +32,32 @@ function parseToolResultContent(content) {
 }
 
 function readThoughtSignature(value) {
-  return value?.thoughtSignature || value?.thought_signature || '';
+  return value?.thoughtSignature || value?.thought_signature || getToolCallSignature(value?.id) || '';
 }
 
 function functionCallPart(functionCall, thoughtSignature) {
   const part = { functionCall };
   if (thoughtSignature) part.thoughtSignature = thoughtSignature;
   return part;
+}
+
+function functionCallPartsWithSignatures(parts) {
+  let lastThoughtSignature = '';
+  const functionCallParts = [];
+
+  for (const part of parts || []) {
+    if (part.thoughtSignature) {
+      lastThoughtSignature = part.thoughtSignature;
+    }
+    if (part.functionCall) {
+      functionCallParts.push({
+        ...part,
+        thoughtSignature: part.thoughtSignature || lastThoughtSignature
+      });
+    }
+  }
+
+  return functionCallParts;
 }
 
 export function anthropicToGemini(request, modelOverrides = {}) {
@@ -142,21 +162,26 @@ function buildToolConfig(toolChoice, functionDeclarations) {
 
 export function geminiToAnthropic(gemini, requestModel) {
   const candidate = gemini.candidates?.[0] || {};
-  const parts = (candidate.content?.parts || []).filter((part) => !part.thought);
+  const rawParts = candidate.content?.parts || [];
+  const parts = rawParts.filter((part) => !part.thought);
   const content = [];
 
+  const signedFunctionCallParts = functionCallPartsWithSignatures(rawParts);
   for (const part of parts) {
     if (part.text) {
       content.push({ type: 'text', text: part.text });
     }
     if (part.functionCall) {
+      const signedPart = signedFunctionCallParts.shift() || part;
+      const id = `toolu_${crypto.randomUUID().replaceAll('-', '')}`;
+      rememberToolCallSignature(id, signedPart.thoughtSignature);
       content.push({
         type: 'tool_use',
-        id: `toolu_${crypto.randomUUID().replaceAll('-', '')}`,
+        id,
         name: part.functionCall.name,
         input: part.functionCall.args || {},
-        thought_signature: part.thoughtSignature,
-        thoughtSignature: part.thoughtSignature
+        thought_signature: signedPart.thoughtSignature,
+        thoughtSignature: signedPart.thoughtSignature
       });
     }
   }
@@ -181,8 +206,7 @@ export function geminiChunkParts(gemini) {
   const parts = (candidate.content?.parts || []).filter((part) => !part.thought);
   return {
     text: parts.map((part) => part.text).filter(Boolean).join(''),
-    functionCalls: parts
-      .filter((part) => part.functionCall)
+    functionCalls: functionCallPartsWithSignatures(candidate.content?.parts || [])
       .map((part) => ({
         ...part.functionCall,
         thoughtSignature: part.thoughtSignature,

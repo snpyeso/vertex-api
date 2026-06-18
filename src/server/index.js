@@ -9,6 +9,7 @@ import { anthropicToGemini, geminiChunkParts as anthropicChunkParts, geminiToAnt
 import { geminiChunkParts as openAiChunkParts, openAiToGemini, geminiToOpenAi } from './openaiGeminiMapper.js';
 import { VertexClient } from './vertexClient.js';
 import { configureProxy, getCurrentProxyUrl } from './proxy.js';
+import { rememberToolCallSignature } from './thoughtSignatures.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '../..');
@@ -241,6 +242,8 @@ async function streamOpenAiResponse(res, model, stream) {
       }
 
       for (const [index, call] of chunk.functionCalls.entries()) {
+        const toolCallId = `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`;
+        rememberToolCallSignature(toolCallId, call.thoughtSignature);
         writeSseData(res, {
           id,
           object: 'chat.completion.chunk',
@@ -253,7 +256,7 @@ async function streamOpenAiResponse(res, model, stream) {
                 tool_calls: [
                   {
                     index,
-                    id: `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`,
+                    id: toolCallId,
                     type: 'function',
                     extra_content: call.thoughtSignature ? { google: { thought_signature: call.thoughtSignature } } : undefined,
                     thought_signature: call.thoughtSignature,
@@ -350,12 +353,14 @@ async function streamAnthropicResponse(res, model, stream) {
           textBlockOpen = false;
         }
 
+        const toolUseId = `toolu_${crypto.randomUUID().replaceAll('-', '')}`;
+        rememberToolCallSignature(toolUseId, call.thoughtSignature);
         writeSseEvent(res, 'content_block_start', {
           type: 'content_block_start',
           index: contentIndex,
           content_block: {
             type: 'tool_use',
-            id: `toolu_${crypto.randomUUID().replaceAll('-', '')}`,
+            id: toolUseId,
             name: call.name,
             input: {},
             thought_signature: call.thoughtSignature,

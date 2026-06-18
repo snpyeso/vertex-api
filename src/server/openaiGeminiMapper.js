@@ -1,4 +1,5 @@
 import { sanitizeGeminiSchema } from './schema.js';
+import { getToolCallSignature, rememberToolCallSignature } from './thoughtSignatures.js';
 
 function asTextContent(content) {
   if (typeof content === 'string') {
@@ -38,6 +39,7 @@ function readThoughtSignature(value) {
     value?.thought_signature ||
     value?.function?.thoughtSignature ||
     value?.function?.thought_signature ||
+    getToolCallSignature(value?.id) ||
     ''
   );
 }
@@ -46,6 +48,25 @@ function functionCallPart(functionCall, thoughtSignature) {
   const part = { functionCall };
   if (thoughtSignature) part.thoughtSignature = thoughtSignature;
   return part;
+}
+
+function functionCallPartsWithSignatures(parts) {
+  let lastThoughtSignature = '';
+  const functionCallParts = [];
+
+  for (const part of parts || []) {
+    if (part.thoughtSignature) {
+      lastThoughtSignature = part.thoughtSignature;
+    }
+    if (part.functionCall) {
+      functionCallParts.push({
+        ...part,
+        thoughtSignature: part.thoughtSignature || lastThoughtSignature
+      });
+    }
+  }
+
+  return functionCallParts;
 }
 
 export function openAiToGemini(request, modelOverrides = {}) {
@@ -172,7 +193,7 @@ export function geminiToOpenAi(gemini, requestModel) {
   const parts = candidate.content?.parts || [];
   const visibleParts = parts.filter((part) => !part.thought);
   const text = visibleParts.map((part) => part.text).filter(Boolean).join('');
-  const functionCallParts = visibleParts.filter((part) => part.functionCall);
+  const functionCallParts = functionCallPartsWithSignatures(parts);
   const hasToolCalls = functionCallParts.length > 0;
 
   return {
@@ -187,19 +208,7 @@ export function geminiToOpenAi(gemini, requestModel) {
           role: 'assistant',
           content: text || null,
           tool_calls: hasToolCalls
-            ? functionCallParts.map((part, index) => ({
-                id: `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`,
-                type: 'function',
-                extra_content: part.thoughtSignature ? { google: { thought_signature: part.thoughtSignature } } : undefined,
-                thought_signature: part.thoughtSignature,
-                thoughtSignature: part.thoughtSignature,
-                function: {
-                  name: part.functionCall.name,
-                  arguments: JSON.stringify(part.functionCall.args || {}),
-                  thought_signature: part.thoughtSignature,
-                  thoughtSignature: part.thoughtSignature
-                }
-              }))
+            ? functionCallParts.map((part, index) => openAiToolCall(part, index))
             : undefined
         },
         finish_reason: hasToolCalls ? 'tool_calls' : mapFinishReason(candidate.finishReason)
@@ -213,13 +222,30 @@ export function geminiToOpenAi(gemini, requestModel) {
   };
 }
 
+function openAiToolCall(part, index) {
+  const id = `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`;
+  rememberToolCallSignature(id, part.thoughtSignature);
+  return {
+    id,
+    type: 'function',
+    extra_content: part.thoughtSignature ? { google: { thought_signature: part.thoughtSignature } } : undefined,
+    thought_signature: part.thoughtSignature,
+    thoughtSignature: part.thoughtSignature,
+    function: {
+      name: part.functionCall.name,
+      arguments: JSON.stringify(part.functionCall.args || {}),
+      thought_signature: part.thoughtSignature,
+      thoughtSignature: part.thoughtSignature
+    }
+  };
+}
+
 export function geminiChunkParts(gemini) {
   const candidate = gemini.candidates?.[0] || {};
   const parts = (candidate.content?.parts || []).filter((part) => !part.thought);
   return {
     text: parts.map((part) => part.text).filter(Boolean).join(''),
-    functionCalls: parts
-      .filter((part) => part.functionCall)
+    functionCalls: functionCallPartsWithSignatures(candidate.content?.parts || [])
       .map((part) => ({
         ...part.functionCall,
         thoughtSignature: part.thoughtSignature,
