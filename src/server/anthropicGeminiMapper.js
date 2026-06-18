@@ -1,5 +1,5 @@
 import { sanitizeGeminiSchema } from './schema.js';
-import { getToolCallSignature, rememberToolCallSignature } from './thoughtSignatures.js';
+import { getToolCallSignature, getToolNameSignature, rememberToolCallSignature } from './thoughtSignatures.js';
 
 function textFromAnthropicContent(content) {
   if (typeof content === 'string') return content;
@@ -32,7 +32,7 @@ function parseToolResultContent(content) {
 }
 
 function readThoughtSignature(value) {
-  return value?.thoughtSignature || value?.thought_signature || getToolCallSignature(value?.id) || '';
+  return value?.thoughtSignature || value?.thought_signature || getToolCallSignature(value?.id) || getToolNameSignature(value?.name) || '';
 }
 
 function functionCallPart(functionCall, thoughtSignature) {
@@ -174,7 +174,7 @@ export function geminiToAnthropic(gemini, requestModel) {
     if (part.functionCall) {
       const signedPart = signedFunctionCallParts.shift() || part;
       const id = `toolu_${crypto.randomUUID().replaceAll('-', '')}`;
-      rememberToolCallSignature(id, signedPart.thoughtSignature);
+      rememberToolCallSignature(id, signedPart.thoughtSignature, part.functionCall.name);
       content.push({
         type: 'tool_use',
         id,

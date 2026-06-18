@@ -220,6 +220,23 @@ class AppDatabase {
     const row = this.db.prepare('SELECT * FROM vertex_logs WHERE id = ?').get(id);
     return row ? rowToVertexLog(row) : null;
   }
+
+  findRecentThoughtSignature(functionName) {
+    const rows = this.db.prepare(`
+      SELECT response_json
+      FROM vertex_logs
+      WHERE response_json LIKE ?
+      ORDER BY created_at DESC
+      LIMIT 50
+    `).all(`%"name":"${String(functionName || '').replaceAll('"', '\\"')}"%`);
+
+    for (const row of rows) {
+      const signature = findThoughtSignature(parseJson(row.response_json), functionName);
+      if (signature) return signature;
+    }
+
+    return '';
+  }
 }
 
 function migrate(db) {
@@ -334,6 +351,29 @@ function parseJson(value) {
   } catch {
     return value;
   }
+}
+
+function findThoughtSignature(value, functionName) {
+  if (!value || typeof value !== 'object') return '';
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const signature = findThoughtSignature(item, functionName);
+      if (signature) return signature;
+    }
+    return '';
+  }
+
+  if (value.functionCall?.name === functionName && value.thoughtSignature) {
+    return value.thoughtSignature;
+  }
+
+  for (const nested of Object.values(value)) {
+    const signature = findThoughtSignature(nested, functionName);
+    if (signature) return signature;
+  }
+
+  return '';
 }
 
 function hashPassword(password, salt) {

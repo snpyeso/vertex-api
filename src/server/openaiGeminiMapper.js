@@ -1,5 +1,5 @@
 import { sanitizeGeminiSchema } from './schema.js';
-import { getToolCallSignature, rememberToolCallSignature } from './thoughtSignatures.js';
+import { getToolCallSignature, getToolNameSignature, rememberToolCallSignature } from './thoughtSignatures.js';
 
 function asTextContent(content) {
   if (typeof content === 'string') {
@@ -40,6 +40,7 @@ function readThoughtSignature(value) {
     value?.function?.thoughtSignature ||
     value?.function?.thought_signature ||
     getToolCallSignature(value?.id) ||
+    getToolNameSignature(value?.function?.name) ||
     ''
   );
 }
@@ -224,7 +225,7 @@ export function geminiToOpenAi(gemini, requestModel) {
 
 function openAiToolCall(part, index) {
   const id = `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`;
-  rememberToolCallSignature(id, part.thoughtSignature);
+  rememberToolCallSignature(id, part.thoughtSignature, part.functionCall.name);
   return {
     id,
     type: 'function',

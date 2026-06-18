@@ -181,6 +181,7 @@ app.post('/v1/chat/completions', async (req, res, next) => {
 
     const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = openAiToGemini(req.body, overrides);
+    restoreMissingThoughtSignatures(vertexBody);
     if (req.body.stream) {
       return streamOpenAiResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody, { signal: abortController.signal }), {
         endpoint: 'streamGenerateContent',
@@ -220,6 +221,7 @@ app.post('/v1/messages', async (req, res, next) => {
 
     const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = anthropicToGemini(req.body, overrides);
+    restoreMissingThoughtSignatures(vertexBody);
     if (req.body.stream) {
       return streamAnthropicResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody, { signal: abortController.signal }), {
         endpoint: 'streamGenerateContent',
@@ -305,6 +307,19 @@ function saveVertexLog(log) {
   }
 }
 
+function restoreMissingThoughtSignatures(vertexBody) {
+  for (const content of vertexBody.contents || []) {
+    for (const part of content.parts || []) {
+      if (!part.functionCall || part.thoughtSignature) continue;
+      const signature = database.findRecentThoughtSignature(part.functionCall.name);
+      if (signature) {
+        part.thoughtSignature = signature;
+        rememberToolCallSignature('', signature, part.functionCall.name);
+      }
+    }
+  }
+}
+
 async function streamOpenAiResponse(res, model, stream) {
   const id = `chatcmpl-${crypto.randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
@@ -349,7 +364,7 @@ async function streamOpenAiResponse(res, model, stream) {
 
       for (const [index, call] of chunk.functionCalls.entries()) {
         const toolCallId = `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`;
-        rememberToolCallSignature(toolCallId, call.thoughtSignature);
+        rememberToolCallSignature(toolCallId, call.thoughtSignature, call.name);
         if (!writeSseData(res, {
           id,
           object: 'chat.completion.chunk',
@@ -468,7 +483,7 @@ async function streamAnthropicResponse(res, model, stream) {
         }
 
         const toolUseId = `toolu_${crypto.randomUUID().replaceAll('-', '')}`;
-        rememberToolCallSignature(toolUseId, call.thoughtSignature);
+        rememberToolCallSignature(toolUseId, call.thoughtSignature, call.name);
         if (!writeSseEvent(res, 'content_block_start', {
           type: 'content_block_start',
           index: contentIndex,
@@ -476,7 +491,7 @@ async function streamAnthropicResponse(res, model, stream) {
             type: 'tool_use',
             id: toolUseId,
             name: call.name,
-            input: {},
+            input: call.args || {},
             thought_signature: call.thoughtSignature,
             thoughtSignature: call.thoughtSignature
           }
