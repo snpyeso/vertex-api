@@ -15,9 +15,9 @@ export class VertexClient {
     this.token = null;
   }
 
-  async generateContent(model, body) {
+  async generateContent(model, body, options = {}) {
     const endpoint = this.buildEndpoint(model, 'generateContent');
-    const response = await this.fetchVertex(endpoint, body);
+    const response = await this.fetchVertex(endpoint, body, options);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const message = payload.error?.message || response.statusText;
@@ -30,9 +30,9 @@ export class VertexClient {
     return payload;
   }
 
-  async *streamGenerateContent(model, body) {
+  async *streamGenerateContent(model, body, options = {}) {
     const endpoint = `${this.buildEndpoint(model, 'streamGenerateContent')}?alt=sse`;
-    const response = await this.fetchVertex(endpoint, body);
+    const response = await this.fetchVertex(endpoint, body, options);
 
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -46,7 +46,7 @@ export class VertexClient {
     yield* parseSseStream(response.body);
   }
 
-  async fetchVertex(endpoint, body) {
+  async fetchVertex(endpoint, body, options = {}) {
     const maxRetries = retryAttempts();
     let lastResponse = null;
 
@@ -59,6 +59,7 @@ export class VertexClient {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
+        signal: options.signal,
         body: JSON.stringify(body)
       });
 

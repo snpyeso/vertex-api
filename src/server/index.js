@@ -165,6 +165,7 @@ app.get('/v1/models', (req, res, next) => {
 });
 
 app.post('/v1/chat/completions', async (req, res, next) => {
+  const abortController = requestAbortController(req, res);
   try {
     const context = getRequestContext(req, req.headers.authorization);
 
@@ -181,17 +182,19 @@ app.post('/v1/chat/completions', async (req, res, next) => {
     const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = openAiToGemini(req.body, overrides);
     if (req.body.stream) {
-      return streamOpenAiResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody), {
+      return streamOpenAiResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody, { signal: abortController.signal }), {
         endpoint: 'streamGenerateContent',
         model,
-        request: vertexBody
+        request: vertexBody,
+        signal: abortController.signal
       }));
     }
 
     const vertexResponse = await callVertexWithLog(context.client, {
       endpoint: 'generateContent',
       model,
-      request: vertexBody
+      request: vertexBody,
+      signal: abortController.signal
     });
     res.json(geminiToOpenAi(vertexResponse, model));
   } catch (error) {
@@ -200,6 +203,7 @@ app.post('/v1/chat/completions', async (req, res, next) => {
 });
 
 app.post('/v1/messages', async (req, res, next) => {
+  const abortController = requestAbortController(req, res);
   try {
     const context = getRequestContext(req, req.headers.authorization || req.headers['x-api-key']);
 
@@ -217,17 +221,19 @@ app.post('/v1/messages', async (req, res, next) => {
     const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = anthropicToGemini(req.body, overrides);
     if (req.body.stream) {
-      return streamAnthropicResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody), {
+      return streamAnthropicResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody, { signal: abortController.signal }), {
         endpoint: 'streamGenerateContent',
         model,
-        request: vertexBody
+        request: vertexBody,
+        signal: abortController.signal
       }));
     }
 
     const vertexResponse = await callVertexWithLog(context.client, {
       endpoint: 'generateContent',
       model,
-      request: vertexBody
+      request: vertexBody,
+      signal: abortController.signal
     });
     res.json(geminiToAnthropic(vertexResponse, model));
   } catch (error) {
@@ -238,13 +244,13 @@ app.post('/v1/messages', async (req, res, next) => {
 async function callVertexWithLog(client, log) {
   const startedAt = Date.now();
   try {
-    const response = await client.generateContent(log.model, log.request);
+    const response = await client.generateContent(log.model, log.request, { signal: log.signal });
     saveVertexLog({ ...log, status: 200, durationMs: Date.now() - startedAt, response });
     return response;
   } catch (error) {
     saveVertexLog({
       ...log,
-      status: error.status || 500,
+      status: error.name === 'AbortError' ? 499 : error.status || 500,
       durationMs: Date.now() - startedAt,
       response: error.details || { message: error.message },
       errorMessage: error.message
@@ -270,13 +276,23 @@ async function* collectVertexStream(stream, log) {
   } catch (error) {
     saveVertexLog({
       ...log,
-      status: error.status || 500,
+      status: error.name === 'AbortError' ? 499 : error.status || 500,
       durationMs: Date.now() - startedAt,
       response: error.details || { message: error.message },
       errorMessage: error.message
     });
     throw error;
   }
+}
+
+function requestAbortController(req, res) {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on('aborted', abort);
+  res.on('close', abort);
+  return controller;
 }
 
 function saveVertexLog(log) {
