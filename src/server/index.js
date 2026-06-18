@@ -453,11 +453,25 @@ function getRequestContext(_req, authorization) {
 }
 
 function getVertexClient(profile) {
-  const cacheKey = profile.id;
+  const cacheKey = profileCacheKey(profile);
   if (!vertexClients.has(cacheKey)) {
     vertexClients.set(cacheKey, new VertexClient(profileToRuntimeVertex(profile)));
   }
   return vertexClients.get(cacheKey);
+}
+
+function profileCacheKey(profile) {
+  const hash = crypto
+    .createHash('sha256')
+    .update(JSON.stringify({
+      projectId: profile.projectId,
+      location: profile.location,
+      clientEmail: profile.clientEmail,
+      privateKey: profile.privateKey,
+      modelsText: profile.modelsText
+    }))
+    .digest('hex');
+  return `${profile.id}:${hash}`;
 }
 
 function profileToVertexInput(profile) {

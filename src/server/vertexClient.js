@@ -105,7 +105,15 @@ export class VertexClient {
       iat: now
     }));
     const unsigned = `${header}.${claim}`;
-    const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), this.vertexConfig.privateKey);
+    let signature;
+    try {
+      signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), this.vertexConfig.privateKey);
+    } catch (error) {
+      const wrapped = new Error('Private key could not be parsed. Paste the service account private_key value or the full service account JSON, then save the profile again.');
+      wrapped.status = 400;
+      wrapped.details = { code: error.code, message: error.message };
+      throw wrapped;
+    }
     return `${unsigned}.${base64Url(signature)}`;
   }
 }
