@@ -19,6 +19,7 @@ let vertexClient = null;
 const vertexClients = new Map();
 const app = express();
 const port = Number(process.env.PORT || 3100);
+const host = process.env.HOST || '0.0.0.0';
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -529,8 +530,8 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Gemini OpenAI proxy listening on http://localhost:${port}`);
+app.listen(port, host, () => {
+  console.log(`Gemini OpenAI proxy listening on http://${host}:${port}`);
   console.log('Open the web UI to enter Vertex AI settings.');
   if (proxyUrl) console.log(`Using proxy ${proxyUrl}`);
 });

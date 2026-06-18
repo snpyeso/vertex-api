@@ -33,13 +33,14 @@ npm install
 Start on Linux/macOS:
 
 ```bash
-PORT=3100 npm run dev
+HOST=0.0.0.0 PORT=3100 npm run dev
 ```
 
 Start on Windows PowerShell:
 
 ```powershell
 npm.cmd install
+$env:HOST='0.0.0.0'
 $env:PORT='3100'
 npm.cmd run dev
 ```
