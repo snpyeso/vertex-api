@@ -4,7 +4,10 @@ const VERTEX_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token';
 const DEFAULT_RETRY_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAYS_MS = [1000, 5000, 15000];
+const DEFAULT_MIN_INTERVAL_MS = 60000;
 const RETRY_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+let vertexRequestQueue = Promise.resolve();
+let lastVertexRequestAt = 0;
 
 export class VertexClient {
   constructor(vertexConfig) {
@@ -49,6 +52,7 @@ export class VertexClient {
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       const token = await this.getAccessToken();
+      await waitForVertexTurn();
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -133,6 +137,30 @@ export class VertexClient {
 function retryAttempts() {
   const value = Number(process.env.VERTEX_RETRY_ATTEMPTS ?? DEFAULT_RETRY_ATTEMPTS);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+async function waitForVertexTurn() {
+  const previous = vertexRequestQueue;
+  let release;
+  vertexRequestQueue = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+
+  try {
+    const interval = minIntervalMs();
+    const waitMs = Math.max(0, lastVertexRequestAt + interval - Date.now());
+    if (waitMs > 0) await sleep(waitMs);
+    lastVertexRequestAt = Date.now();
+  } finally {
+    release();
+  }
+}
+
+function minIntervalMs() {
+  const value = Number(process.env.VERTEX_MIN_INTERVAL_MS ?? DEFAULT_MIN_INTERVAL_MS);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_MIN_INTERVAL_MS;
 }
 
 function shouldRetry(response, attempt, maxRetries) {

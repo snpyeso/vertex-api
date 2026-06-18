@@ -56,11 +56,12 @@ Local data is stored in `data/app.db`.
 Vertex AI can return `429 Resource has been exhausted` when requests are too frequent or quota is low. The proxy retries transient Vertex errors automatically. Optional tuning:
 
 ```bash
+VERTEX_MIN_INTERVAL_MS=60000
 VERTEX_RETRY_ATTEMPTS=3
 VERTEX_RETRY_DELAYS_MS=1000,5000,15000
 ```
 
-If 429 errors continue after retries, reduce concurrency/request rate, use another model or region, or increase quota in Google Cloud.
+The default minimum interval between Vertex calls is 60000 ms. If 429 errors continue after retries, reduce concurrency/request rate further, use another model or region, or increase quota in Google Cloud.
 
 ## Login
 
