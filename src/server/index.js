@@ -513,7 +513,7 @@ app.use(express.static(webDist));
 app.get('/', (_req, res) => {
   res.sendFile(path.join(webDist, 'index.html'), (error) => {
     if (error) {
-      res.type('html').send('<h1>Gemini OpenAI Proxy</h1><p>Run npm.cmd run build:web to build the Vue UI.</p>');
+      res.type('html').send('<h1>Gemini OpenAI Proxy</h1><p>Run npm run build:web to build the Vue UI.</p>');
     }
   });
 });
