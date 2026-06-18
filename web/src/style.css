@@ -283,6 +283,97 @@ button:disabled {
   width: min(560px, 100%);
 }
 
+.logs-modal {
+  width: min(1180px, 100%);
+}
+
+.logs-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.logs-list,
+.log-detail {
+  min-height: 0;
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+}
+
+.logs-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.log-row {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid #d5cbb9;
+  padding: 10px 12px;
+  color: #1d211d;
+  text-align: left;
+  background: #fffaf0;
+}
+
+.log-row.active {
+  border-color: #c14c2f;
+  background: #fff2c7;
+}
+
+.log-row span,
+.log-row small,
+.log-row em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-row small {
+  color: #53645b;
+}
+
+.log-row em {
+  color: #a2281d;
+  font-style: normal;
+}
+
+.log-detail {
+  border: 1px solid #d5cbb9;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fffaf0;
+}
+
+.log-detail h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.log-detail h3:not(:first-child) {
+  margin-top: 16px;
+}
+
+.log-detail pre {
+  overflow: auto;
+  margin: 0;
+  border-radius: 6px;
+  padding: 12px;
+  color: #17211b;
+  background: #eee9df;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.empty-state {
+  margin: 0;
+  color: #53645b;
+}
+
 .token-list {
   display: grid;
   gap: 10px;
@@ -385,7 +476,8 @@ h2 {
   }
 
   .topbar,
-  .token-row-with-profile {
+  .token-row-with-profile,
+  .logs-layout {
     grid-template-columns: 1fr;
   }
 }

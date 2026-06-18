@@ -118,6 +118,16 @@ app.put('/app/tokens', requireUiAuth, (req, res) => {
   res.json({ ok: true, config: publicConfig(config), state: database.getState() });
 });
 
+app.get('/app/vertex-logs', requireUiAuth, (_req, res) => {
+  res.json({ logs: database.listVertexLogs() });
+});
+
+app.get('/app/vertex-logs/:id', requireUiAuth, (req, res) => {
+  const log = database.getVertexLog(req.params.id);
+  if (!log) return res.status(404).json({ error: { message: 'Log not found' } });
+  res.json({ log });
+});
+
 app.get('/config', requireUiAuth, (_req, res) => {
   res.json(publicConfig(config));
 });
@@ -171,10 +181,18 @@ app.post('/v1/chat/completions', async (req, res, next) => {
     const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = openAiToGemini(req.body, overrides);
     if (req.body.stream) {
-      return streamOpenAiResponse(res, model, context.client.streamGenerateContent(model, vertexBody));
+      return streamOpenAiResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody), {
+        endpoint: 'streamGenerateContent',
+        model,
+        request: vertexBody
+      }));
     }
 
-    const vertexResponse = await context.client.generateContent(model, vertexBody);
+    const vertexResponse = await callVertexWithLog(context.client, {
+      endpoint: 'generateContent',
+      model,
+      request: vertexBody
+    });
     res.json(geminiToOpenAi(vertexResponse, model));
   } catch (error) {
     next(error);
@@ -199,15 +217,75 @@ app.post('/v1/messages', async (req, res, next) => {
     const overrides = context.vertex.preferences?.post_body_parameter_overrides?.[model] || {};
     const vertexBody = anthropicToGemini(req.body, overrides);
     if (req.body.stream) {
-      return streamAnthropicResponse(res, model, context.client.streamGenerateContent(model, vertexBody));
+      return streamAnthropicResponse(res, model, collectVertexStream(context.client.streamGenerateContent(model, vertexBody), {
+        endpoint: 'streamGenerateContent',
+        model,
+        request: vertexBody
+      }));
     }
 
-    const vertexResponse = await context.client.generateContent(model, vertexBody);
+    const vertexResponse = await callVertexWithLog(context.client, {
+      endpoint: 'generateContent',
+      model,
+      request: vertexBody
+    });
     res.json(geminiToAnthropic(vertexResponse, model));
   } catch (error) {
     next(error);
   }
 });
+
+async function callVertexWithLog(client, log) {
+  const startedAt = Date.now();
+  try {
+    const response = await client.generateContent(log.model, log.request);
+    saveVertexLog({ ...log, status: 200, durationMs: Date.now() - startedAt, response });
+    return response;
+  } catch (error) {
+    saveVertexLog({
+      ...log,
+      status: error.status || 500,
+      durationMs: Date.now() - startedAt,
+      response: error.details || { message: error.message },
+      errorMessage: error.message
+    });
+    throw error;
+  }
+}
+
+async function* collectVertexStream(stream, log) {
+  const startedAt = Date.now();
+  const chunks = [];
+  try {
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+      yield chunk;
+    }
+    saveVertexLog({
+      ...log,
+      status: 200,
+      durationMs: Date.now() - startedAt,
+      response: { chunks }
+    });
+  } catch (error) {
+    saveVertexLog({
+      ...log,
+      status: error.status || 500,
+      durationMs: Date.now() - startedAt,
+      response: error.details || { message: error.message },
+      errorMessage: error.message
+    });
+    throw error;
+  }
+}
+
+function saveVertexLog(log) {
+  try {
+    database.addVertexLog(log);
+  } catch (error) {
+    console.error('Failed to save Vertex log:', error.message);
+  }
+}
 
 async function streamOpenAiResponse(res, model, stream) {
   const id = `chatcmpl-${crypto.randomUUID()}`;

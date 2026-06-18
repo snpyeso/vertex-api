@@ -168,6 +168,58 @@ class AppDatabase {
   deleteSession(token) {
     this.db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
   }
+
+  addVertexLog(log) {
+    const saved = {
+      id: crypto.randomUUID(),
+      createdAt: Date.now(),
+      endpoint: log.endpoint || '',
+      model: log.model || '',
+      status: Number(log.status || 0),
+      durationMs: Number(log.durationMs || 0),
+      requestJson: JSON.stringify(log.request ?? null),
+      responseJson: JSON.stringify(log.response ?? null),
+      errorMessage: log.errorMessage || ''
+    };
+
+    this.db.prepare(`
+      INSERT INTO vertex_logs (id, created_at, endpoint, model, status, duration_ms, request_json, response_json, error_message)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      saved.id,
+      saved.createdAt,
+      saved.endpoint,
+      saved.model,
+      saved.status,
+      saved.durationMs,
+      saved.requestJson,
+      saved.responseJson,
+      saved.errorMessage
+    );
+
+    this.db.prepare(`
+      DELETE FROM vertex_logs
+      WHERE id NOT IN (
+        SELECT id FROM vertex_logs ORDER BY created_at DESC LIMIT 1000
+      )
+    `).run();
+
+    return saved.id;
+  }
+
+  listVertexLogs() {
+    return this.db.prepare(`
+      SELECT id, created_at, endpoint, model, status, duration_ms, error_message
+      FROM vertex_logs
+      ORDER BY created_at DESC
+      LIMIT 1000
+    `).all().map(rowToVertexLogSummary);
+  }
+
+  getVertexLog(id) {
+    const row = this.db.prepare('SELECT * FROM vertex_logs WHERE id = ?').get(id);
+    return row ? rowToVertexLog(row) : null;
+  }
 }
 
 function migrate(db) {
@@ -208,6 +260,20 @@ function migrate(db) {
       expires_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS vertex_logs (
+      id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      endpoint TEXT NOT NULL,
+      model TEXT NOT NULL,
+      status INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      request_json TEXT NOT NULL,
+      response_json TEXT NOT NULL,
+      error_message TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_vertex_logs_created_at ON vertex_logs(created_at DESC);
   `);
 }
 
@@ -240,6 +306,34 @@ function rowToProfile(row) {
     privateKey: row.private_key,
     modelsText: row.models_text
   };
+}
+
+function rowToVertexLogSummary(row) {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    endpoint: row.endpoint,
+    model: row.model,
+    status: row.status,
+    durationMs: row.duration_ms,
+    errorMessage: row.error_message
+  };
+}
+
+function rowToVertexLog(row) {
+  return {
+    ...rowToVertexLogSummary(row),
+    request: parseJson(row.request_json),
+    response: parseJson(row.response_json)
+  };
+}
+
+function parseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function hashPassword(password, salt) {

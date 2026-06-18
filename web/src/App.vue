@@ -9,6 +9,9 @@ const loginError = ref('');
 const passwordModalOpen = ref(false);
 const currentPassword = ref('');
 const newPassword = ref('');
+const logsModalOpen = ref(false);
+const vertexLogs = ref([]);
+const selectedLog = ref(null);
 
 const profiles = ref([]);
 const activeProfileId = ref('');
@@ -206,6 +209,22 @@ async function saveTokens() {
   await loadModels();
 }
 
+async function openLogs() {
+  logsModalOpen.value = true;
+  selectedLog.value = null;
+  await loadVertexLogs();
+}
+
+async function loadVertexLogs() {
+  const payload = await api('/app/vertex-logs');
+  vertexLogs.value = payload.logs || [];
+}
+
+async function selectLog(logId) {
+  const payload = await api(`/app/vertex-logs/${logId}`);
+  selectedLog.value = payload.log;
+}
+
 async function loadModels() {
   const response = await fetch('/v1/models', { headers: authHeaders() });
   const payload = await response.json();
@@ -246,6 +265,14 @@ function authHeaders() {
 
 function normalizedTokens() {
   return apiTokens.value.filter((token) => String(token.value || '').trim());
+}
+
+function formatTime(value) {
+  return new Date(value).toLocaleString();
+}
+
+function formatJson(value) {
+  return JSON.stringify(value, null, 2);
 }
 
 onMounted(checkSession);
@@ -308,6 +335,7 @@ onMounted(checkSession);
         </div>
         <div class="account-box">
           <span>{{ username }}</span>
+          <button type="button" class="ghost-button" @click="openLogs">Logs</button>
           <button type="button" class="ghost-button" @click="passwordModalOpen = true">Password</button>
           <button type="button" class="ghost-button" @click="logout">Logout</button>
         </div>
@@ -432,6 +460,47 @@ onMounted(checkSession);
         </label>
         <div class="modal-actions">
           <button type="button" @click="changePassword">Save password</button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="logsModalOpen" class="modal-layer" @click.self="logsModalOpen = false">
+      <section class="config-modal logs-modal">
+        <button type="button" class="modal-close" aria-label="Close logs" @click="logsModalOpen = false">x</button>
+        <div class="brand-row">
+          <div>
+            <h2>Vertex Logs</h2>
+            <p>Latest {{ vertexLogs.length }} Vertex request{{ vertexLogs.length === 1 ? '' : 's' }}</p>
+          </div>
+          <button type="button" class="ghost-button" @click="loadVertexLogs">Refresh</button>
+        </div>
+
+        <div class="logs-layout">
+          <div class="logs-list">
+            <button
+              v-for="log in vertexLogs"
+              :key="log.id"
+              type="button"
+              :class="['log-row', { active: selectedLog?.id === log.id }]"
+              @click="selectLog(log.id)"
+            >
+              <span>{{ formatTime(log.createdAt) }}</span>
+              <strong>{{ log.model }}</strong>
+              <small>{{ log.endpoint }} · {{ log.status }} · {{ log.durationMs }}ms</small>
+              <em v-if="log.errorMessage">{{ log.errorMessage }}</em>
+            </button>
+            <p v-if="vertexLogs.length === 0" class="empty-state">No Vertex logs yet.</p>
+          </div>
+
+          <div class="log-detail">
+            <template v-if="selectedLog">
+              <h3>Request</h3>
+              <pre>{{ formatJson(selectedLog.request) }}</pre>
+              <h3>Response</h3>
+              <pre>{{ formatJson(selectedLog.response) }}</pre>
+            </template>
+            <p v-else class="empty-state">Select a log row to inspect Vertex request and response parameters.</p>
+          </div>
         </div>
       </section>
     </div>
