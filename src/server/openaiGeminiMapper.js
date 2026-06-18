@@ -229,14 +229,9 @@ function openAiToolCall(part, index) {
   return {
     id,
     type: 'function',
-    extra_content: part.thoughtSignature ? { google: { thought_signature: part.thoughtSignature } } : undefined,
-    thought_signature: part.thoughtSignature,
-    thoughtSignature: part.thoughtSignature,
     function: {
       name: part.functionCall.name,
-      arguments: JSON.stringify(part.functionCall.args || {}),
-      thought_signature: part.thoughtSignature,
-      thoughtSignature: part.thoughtSignature
+      arguments: JSON.stringify(part.functionCall.args || {})
     }
   };
 }

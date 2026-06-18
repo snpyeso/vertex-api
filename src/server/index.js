@@ -404,14 +404,9 @@ async function streamOpenAiResponse(res, model, stream) {
                     index,
                     id: toolCallId,
                     type: 'function',
-                    extra_content: call.thoughtSignature ? { google: { thought_signature: call.thoughtSignature } } : undefined,
-                    thought_signature: call.thoughtSignature,
-                    thoughtSignature: call.thoughtSignature,
                     function: {
                       name: call.name,
-                      arguments: JSON.stringify(call.args || {}),
-                      thought_signature: call.thoughtSignature,
-                      thoughtSignature: call.thoughtSignature
+                      arguments: JSON.stringify(call.args || {})
                     }
                   }
                 ]
