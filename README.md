@@ -24,6 +24,20 @@ Streaming is supported for both OpenAI and Anthropic compatible endpoints with `
 
 ## Start
 
+Install dependencies after cloning:
+
+```bash
+npm install
+```
+
+Start on Linux/macOS:
+
+```bash
+PORT=3100 npm run dev
+```
+
+Start on Windows PowerShell:
+
 ```powershell
 npm.cmd install
 $env:PORT='3100'
