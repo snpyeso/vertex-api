@@ -476,10 +476,15 @@ async function streamAnthropicResponse(res, model, stream) {
             type: 'tool_use',
             id: toolUseId,
             name: call.name,
-            input: call.args || {},
+            input: {},
             thought_signature: call.thoughtSignature,
             thoughtSignature: call.thoughtSignature
           }
+        })) break;
+        if (!writeSseEvent(res, 'content_block_delta', {
+          type: 'content_block_delta',
+          index: contentIndex,
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.args || {}) }
         })) break;
         if (!writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex })) break;
         contentIndex += 1;
