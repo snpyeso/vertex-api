@@ -406,6 +406,28 @@ async function streamOpenAiResponse(res, model, stream) {
                     type: 'function',
                     function: {
                       name: call.name,
+                      arguments: ''
+                    }
+                  }
+                ]
+              },
+              finish_reason: null
+            }
+          ]
+        })) break;
+        if (!writeSseData(res, {
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index,
+                    function: {
                       arguments: JSON.stringify(call.args || {})
                     }
                   }
