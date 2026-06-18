@@ -513,7 +513,7 @@ async function streamAnthropicResponse(res, model, stream) {
             type: 'tool_use',
             id: toolUseId,
             name: call.name,
-            input: call.args || {},
+            input: {},
             thought_signature: call.thoughtSignature,
             thoughtSignature: call.thoughtSignature
           }
