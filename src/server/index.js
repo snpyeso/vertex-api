@@ -297,7 +297,9 @@ function requestAbortController(req, res) {
   };
   req.on('aborted', abort);
   res.on('close', () => {
-    if (!res.writableFinished) abort();
+    setImmediate(() => {
+      if (!res.writableFinished && !res.writableEnded) abort();
+    });
   });
   return controller;
 }
