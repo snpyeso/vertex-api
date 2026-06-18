@@ -46,18 +46,30 @@ export class VertexClient {
   async fetchVertex(endpoint, body, options = {}) {
     const maxRetries = retryAttempts();
     let lastResponse = null;
+    let lastError = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       const token = await this.getAccessToken();
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        signal: options.signal,
-        body: JSON.stringify(body)
-      });
+      let response;
+      try {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          signal: options.signal,
+          body: JSON.stringify(body)
+        });
+      } catch (error) {
+        if (options.signal?.aborted || !shouldRetryFetchError(error, attempt, maxRetries)) {
+          throw error;
+        }
+
+        lastError = error;
+        await sleep(retryDelayMs(null, attempt));
+        continue;
+      }
 
       if (!shouldRetry(response, attempt, maxRetries)) {
         return response;
@@ -67,6 +79,7 @@ export class VertexClient {
       await sleep(retryDelayMs(response, attempt));
     }
 
+    if (lastError) throw lastError;
     return lastResponse;
   }
 
@@ -141,7 +154,7 @@ function shouldRetry(response, attempt, maxRetries) {
 }
 
 function retryDelayMs(response, attempt) {
-  const retryAfter = response.headers.get('retry-after');
+  const retryAfter = response?.headers?.get('retry-after');
   if (retryAfter) {
     const seconds = Number(retryAfter);
     if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
@@ -167,6 +180,22 @@ function friendlyVertexMessage(status, message) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetryFetchError(error, attempt, maxRetries) {
+  if (attempt >= maxRetries || error?.name === 'AbortError') return false;
+  const code = error?.cause?.code || error?.code || '';
+  if (!code) return true;
+  return [
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'EPIPE',
+    'ETIMEDOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_SOCKET',
+    'UND_ERR_BODY_TIMEOUT'
+  ].includes(code);
 }
 
 async function* parseSseStream(body) {

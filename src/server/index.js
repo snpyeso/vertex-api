@@ -254,7 +254,7 @@ async function callVertexWithLog(client, log) {
       ...log,
       status: error.name === 'AbortError' ? 499 : error.status || 500,
       durationMs: Date.now() - startedAt,
-      response: error.details || { message: error.message },
+      response: error.details || serializeError(error),
       errorMessage: error.message
     });
     throw error;
@@ -280,7 +280,10 @@ async function* collectVertexStream(stream, log) {
       ...log,
       status: error.name === 'AbortError' ? 499 : error.status || 500,
       durationMs: Date.now() - startedAt,
-      response: error.details || { message: error.message },
+      response: {
+        ...serializeError(error),
+        chunks
+      },
       errorMessage: error.message
     });
     throw error;
@@ -305,6 +308,27 @@ function saveVertexLog(log) {
   } catch (error) {
     console.error('Failed to save Vertex log:', error.message);
   }
+}
+
+function serializeError(error) {
+  return {
+    name: error?.name || 'Error',
+    message: error?.message || String(error),
+    code: error?.code || error?.cause?.code || '',
+    cause: serializeErrorCause(error?.cause),
+    stack: error?.stack || ''
+  };
+}
+
+function serializeErrorCause(cause) {
+  if (!cause) return null;
+  if (typeof cause !== 'object') return { message: String(cause) };
+  return {
+    name: cause.name || '',
+    message: cause.message || '',
+    code: cause.code || '',
+    stack: cause.stack || ''
+  };
 }
 
 function restoreMissingThoughtSignatures(vertexBody) {

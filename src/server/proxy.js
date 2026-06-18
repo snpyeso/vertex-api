@@ -14,10 +14,15 @@ export function configureProxy(proxyOverride) {
       readWindowsProxy()
   );
 
+  const dispatcherOptions = {
+    bodyTimeout: timeoutMs('VERTEX_BODY_TIMEOUT_MS', 0),
+    headersTimeout: timeoutMs('VERTEX_HEADERS_TIMEOUT_MS', 0)
+  };
+
   if (proxyUrl) {
-    setGlobalDispatcher(new ProxyAgent(proxyUrl));
+    setGlobalDispatcher(new ProxyAgent({ uri: proxyUrl, ...dispatcherOptions }));
   } else {
-    setGlobalDispatcher(new Agent());
+    setGlobalDispatcher(new Agent(dispatcherOptions));
   }
 
   currentProxyUrl = proxyUrl;
@@ -33,6 +38,11 @@ function normalizeProxyUrl(proxy) {
   const trimmed = proxy.trim();
   if (!trimmed) return '';
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+function timeoutMs(name, fallback) {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 function readWindowsProxy() {
