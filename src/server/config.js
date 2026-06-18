@@ -112,7 +112,47 @@ function normalizeVertexConfig(input) {
 }
 
 function normalizePrivateKey(value) {
-  return String(value).trim().replaceAll('\\n', '\n');
+  let key = value;
+
+  if (key && typeof key === 'object') {
+    key = key.privateKey || key.private_key || '';
+  }
+
+  key = String(key || '').trim();
+
+  if (key.startsWith('{') || key.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(key);
+      key = typeof parsed === 'object' && parsed
+        ? parsed.privateKey || parsed.private_key || ''
+        : parsed;
+    } catch {
+      // Keep the original value and continue with best-effort PEM cleanup.
+    }
+  }
+
+  key = String(key || '').trim();
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1).trim();
+  }
+
+  key = key
+    .replaceAll('\\r\\n', '\n')
+    .replaceAll('\\n', '\n')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+
+  return normalizePemLineBreaks(key);
+}
+
+function normalizePemLineBreaks(key) {
+  const match = key.match(/^(-----BEGIN [^-]+-----)\s*([A-Za-z0-9+/=\s]+?)\s*(-----END [^-]+-----)$/s);
+  if (!match) return key;
+
+  const [, header, body, footer] = match;
+  const compactBody = body.replace(/\s+/g, '');
+  const wrappedBody = compactBody.match(/.{1,64}/g)?.join('\n') || compactBody;
+  return `${header}\n${wrappedBody}\n${footer}`;
 }
 
 function normalizeModels(value) {
