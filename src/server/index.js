@@ -312,7 +312,7 @@ async function streamOpenAiResponse(res, model, stream) {
   let finished = false;
 
   setSseHeaders(res);
-  const heartbeat = startSseHeartbeat(res);
+  const heartbeat = startSseHeartbeat(res, 'openai');
   writeSseData(res, {
     id,
     object: 'chat.completion.chunk',
@@ -425,7 +425,7 @@ async function streamAnthropicResponse(res, model, stream) {
   let stopReason = 'end_turn';
 
   setSseHeaders(res);
-  const heartbeat = startSseHeartbeat(res);
+  const heartbeat = startSseHeartbeat(res, 'anthropic');
   writeSseEvent(res, 'message_start', {
     type: 'message_start',
     message: {
@@ -476,15 +476,10 @@ async function streamAnthropicResponse(res, model, stream) {
             type: 'tool_use',
             id: toolUseId,
             name: call.name,
-            input: {},
+            input: call.args || {},
             thought_signature: call.thoughtSignature,
             thoughtSignature: call.thoughtSignature
           }
-        })) break;
-        if (!writeSseEvent(res, 'content_block_delta', {
-          type: 'content_block_delta',
-          index: contentIndex,
-          delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.args || {}) }
         })) break;
         if (!writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex })) break;
         contentIndex += 1;
@@ -543,10 +538,14 @@ function writeSseEvent(res, event, data) {
   return writeSseData(res, data);
 }
 
-function startSseHeartbeat(res) {
+function startSseHeartbeat(res, format) {
   return setInterval(() => {
     if (!res.destroyed && !res.writableEnded) {
-      res.write(': ping\n\n');
+      if (format === 'anthropic') {
+        writeSseEvent(res, 'ping', { type: 'ping' });
+      } else {
+        res.write(': ping\n\n');
+      }
     }
   }, 15000);
 }
