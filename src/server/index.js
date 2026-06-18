@@ -288,10 +288,12 @@ async function* collectVertexStream(stream, log) {
 function requestAbortController(req, res) {
   const controller = new AbortController();
   const abort = () => {
-    if (!res.writableEnded) controller.abort();
+    if (!controller.signal.aborted) controller.abort();
   };
   req.on('aborted', abort);
-  res.on('close', abort);
+  res.on('close', () => {
+    if (!res.writableFinished) abort();
+  });
   return controller;
 }
 
@@ -310,35 +312,37 @@ async function streamOpenAiResponse(res, model, stream) {
   let finished = false;
 
   setSseHeaders(res);
+  const heartbeat = startSseHeartbeat(res);
 
   try {
     for await (const geminiChunk of stream) {
+      if (res.destroyed || res.writableEnded) break;
       if (!sentRole) {
-        writeSseData(res, {
+        if (!writeSseData(res, {
           id,
           object: 'chat.completion.chunk',
           created,
           model,
           choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }]
-        });
+        })) break;
         sentRole = true;
       }
 
       const chunk = openAiChunkParts(geminiChunk);
       if (chunk.text) {
-        writeSseData(res, {
+        if (!writeSseData(res, {
           id,
           object: 'chat.completion.chunk',
           created,
           model,
           choices: [{ index: 0, delta: { content: chunk.text }, finish_reason: null }]
-        });
+        })) break;
       }
 
       for (const [index, call] of chunk.functionCalls.entries()) {
         const toolCallId = `call_${index}_${crypto.randomUUID().replaceAll('-', '')}`;
         rememberToolCallSignature(toolCallId, call.thoughtSignature);
-        writeSseData(res, {
+        if (!writeSseData(res, {
           id,
           object: 'chat.completion.chunk',
           created,
@@ -367,22 +371,22 @@ async function streamOpenAiResponse(res, model, stream) {
               finish_reason: null
             }
           ]
-        });
+        })) break;
       }
 
       if (chunk.finishReason) {
-        writeSseData(res, {
+        if (!writeSseData(res, {
           id,
           object: 'chat.completion.chunk',
           created,
           model,
           choices: [{ index: 0, delta: {}, finish_reason: chunk.functionCalls.length ? 'tool_calls' : chunk.finishReason }]
-        });
+        })) break;
         finished = true;
       }
     }
 
-    if (!finished) {
+    if (!finished && !res.destroyed && !res.writableEnded) {
       writeSseData(res, {
         id,
         object: 'chat.completion.chunk',
@@ -391,12 +395,18 @@ async function streamOpenAiResponse(res, model, stream) {
         choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
       });
     }
-    res.write('data: [DONE]\n\n');
-    res.end();
+    if (!res.destroyed && !res.writableEnded) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
   } catch (error) {
-    writeSseData(res, { error: { message: error.message, type: 'api_error', details: error.details } });
-    res.write('data: [DONE]\n\n');
-    res.end();
+    if (!res.destroyed && !res.writableEnded) {
+      writeSseData(res, { error: { message: error.message, type: 'api_error', details: error.details } });
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -407,6 +417,7 @@ async function streamAnthropicResponse(res, model, stream) {
   let stopReason = 'end_turn';
 
   setSseHeaders(res);
+  const heartbeat = startSseHeartbeat(res);
   writeSseEvent(res, 'message_start', {
     type: 'message_start',
     message: {
@@ -423,33 +434,34 @@ async function streamAnthropicResponse(res, model, stream) {
 
   try {
     for await (const geminiChunk of stream) {
+      if (res.destroyed || res.writableEnded) break;
       const chunk = anthropicChunkParts(geminiChunk);
       if (chunk.text) {
         if (!textBlockOpen) {
-          writeSseEvent(res, 'content_block_start', {
+          if (!writeSseEvent(res, 'content_block_start', {
             type: 'content_block_start',
             index: contentIndex,
             content_block: { type: 'text', text: '' }
-          });
+          })) break;
           textBlockOpen = true;
         }
-        writeSseEvent(res, 'content_block_delta', {
+        if (!writeSseEvent(res, 'content_block_delta', {
           type: 'content_block_delta',
           index: contentIndex,
           delta: { type: 'text_delta', text: chunk.text }
-        });
+        })) break;
       }
 
       for (const call of chunk.functionCalls) {
         if (textBlockOpen) {
-          writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex });
+          if (!writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex })) break;
           contentIndex += 1;
           textBlockOpen = false;
         }
 
         const toolUseId = `toolu_${crypto.randomUUID().replaceAll('-', '')}`;
         rememberToolCallSignature(toolUseId, call.thoughtSignature);
-        writeSseEvent(res, 'content_block_start', {
+        if (!writeSseEvent(res, 'content_block_start', {
           type: 'content_block_start',
           index: contentIndex,
           content_block: {
@@ -460,13 +472,13 @@ async function streamAnthropicResponse(res, model, stream) {
             thought_signature: call.thoughtSignature,
             thoughtSignature: call.thoughtSignature
           }
-        });
-        writeSseEvent(res, 'content_block_delta', {
+        })) break;
+        if (!writeSseEvent(res, 'content_block_delta', {
           type: 'content_block_delta',
           index: contentIndex,
           delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.args || {}) }
-        });
-        writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex });
+        })) break;
+        if (!writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex })) break;
         contentIndex += 1;
         stopReason = 'tool_use';
       }
@@ -476,22 +488,28 @@ async function streamAnthropicResponse(res, model, stream) {
       }
     }
 
-    if (textBlockOpen) {
+    if (textBlockOpen && !res.destroyed && !res.writableEnded) {
       writeSseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: contentIndex });
     }
-    writeSseEvent(res, 'message_delta', {
-      type: 'message_delta',
-      delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: { output_tokens: 0 }
-    });
-    writeSseEvent(res, 'message_stop', { type: 'message_stop' });
-    res.end();
+    if (!res.destroyed && !res.writableEnded) {
+      writeSseEvent(res, 'message_delta', {
+        type: 'message_delta',
+        delta: { stop_reason: stopReason, stop_sequence: null },
+        usage: { output_tokens: 0 }
+      });
+      writeSseEvent(res, 'message_stop', { type: 'message_stop' });
+      res.end();
+    }
   } catch (error) {
-    writeSseEvent(res, 'error', {
-      type: 'error',
-      error: { type: 'api_error', message: error.message }
-    });
-    res.end();
+    if (!res.destroyed && !res.writableEnded) {
+      writeSseEvent(res, 'error', {
+        type: 'error',
+        error: { type: 'api_error', message: error.message }
+      });
+      res.end();
+    }
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -504,12 +522,22 @@ function setSseHeaders(res) {
 }
 
 function writeSseData(res, data) {
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  if (res.destroyed || res.writableEnded) return false;
+  return res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 function writeSseEvent(res, event, data) {
+  if (res.destroyed || res.writableEnded) return false;
   res.write(`event: ${event}\n`);
-  writeSseData(res, data);
+  return writeSseData(res, data);
+}
+
+function startSseHeartbeat(res) {
+  return setInterval(() => {
+    if (!res.destroyed && !res.writableEnded) {
+      res.write(': ping\n\n');
+    }
+  }, 15000);
 }
 
 function loadActiveRuntimeConfig() {
