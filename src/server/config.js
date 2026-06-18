@@ -16,6 +16,15 @@ export function createRuntimeConfig() {
   };
 }
 
+export function resetRuntimeConfig(config) {
+  config.configured = false;
+  config.requireApiKey = false;
+  config.apiKeys = new Set();
+  config.apiKeyProfiles = new Map();
+  config.vertex = null;
+  return config;
+}
+
 export function applyRuntimeConfig(config, input) {
   const vertex = normalizeVertexConfig(input?.vertex || input || {});
   const apiKeys = Array.isArray(input?.apiKeys) ? input.apiKeys : splitLines(input?.apiKeys);

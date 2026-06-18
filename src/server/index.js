@@ -3,7 +3,7 @@ import cors from 'cors';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applyRuntimeConfig, assertApiKey, assertConfigured, createRuntimeConfig, publicConfig } from './config.js';
+import { applyRuntimeConfig, assertApiKey, assertConfigured, createRuntimeConfig, publicConfig, resetRuntimeConfig } from './config.js';
 import { createDatabase } from './db.js';
 import { anthropicToGemini, geminiChunkParts as anthropicChunkParts, geminiToAnthropic } from './anthropicGeminiMapper.js';
 import { geminiChunkParts as openAiChunkParts, openAiToGemini, geminiToOpenAi } from './openaiGeminiMapper.js';
@@ -407,7 +407,11 @@ function writeSseEvent(res, event, data) {
 
 function loadActiveRuntimeConfig() {
   const activeProfile = database.getActiveProfile();
-  if (!activeProfile) return;
+  if (!activeProfile || !isCompleteProfile(activeProfile)) {
+    resetRuntimeConfig(config);
+    vertexClient = null;
+    return;
+  }
 
   const tokens = database.listTokens();
   applyRuntimeConfig(config, {
@@ -416,6 +420,14 @@ function loadActiveRuntimeConfig() {
     vertex: profileToVertexInput(activeProfile)
   });
   vertexClient = getVertexClient(activeProfile);
+}
+
+function isCompleteProfile(profile) {
+  return Boolean(
+    String(profile?.projectId || '').trim() &&
+      String(profile?.clientEmail || '').trim() &&
+      String(profile?.privateKey || '').trim()
+  );
 }
 
 function getRequestContext(_req, authorization) {
