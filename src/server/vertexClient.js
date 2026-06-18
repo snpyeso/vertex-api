@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 const VERTEX_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token';
 const DEFAULT_RETRY_ATTEMPTS = 3;
-const DEFAULT_RETRY_DELAY_MS = 1000;
+const DEFAULT_RETRY_DELAYS_MS = [1000, 5000, 15000];
 const RETRY_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 export class VertexClient {
@@ -149,9 +149,12 @@ function retryDelayMs(response, attempt) {
     if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
   }
 
-  const baseDelay = Number(process.env.VERTEX_RETRY_DELAY_MS ?? DEFAULT_RETRY_DELAY_MS);
-  const delay = Number.isFinite(baseDelay) && baseDelay > 0 ? baseDelay : DEFAULT_RETRY_DELAY_MS;
-  return delay * 2 ** attempt;
+  const customDelays = String(process.env.VERTEX_RETRY_DELAYS_MS || '')
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const delays = customDelays.length > 0 ? customDelays : DEFAULT_RETRY_DELAYS_MS;
+  return delays[Math.min(attempt, delays.length - 1)];
 }
 
 function friendlyVertexMessage(status, message) {

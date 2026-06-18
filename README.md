@@ -57,7 +57,7 @@ Vertex AI can return `429 Resource has been exhausted` when requests are too fre
 
 ```bash
 VERTEX_RETRY_ATTEMPTS=3
-VERTEX_RETRY_DELAY_MS=1000
+VERTEX_RETRY_DELAYS_MS=1000,5000,15000
 ```
 
 If 429 errors continue after retries, reduce concurrency/request rate, use another model or region, or increase quota in Google Cloud.
