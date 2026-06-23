@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { refreshProxyIfNeeded, refreshProxyNow } from './proxy.js';
 
 const VERTEX_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token';
@@ -49,9 +50,10 @@ export class VertexClient {
     let lastError = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      const token = await this.getAccessToken();
+      await refreshProxyIfNeeded();
       let response;
       try {
+        const token = await this.getAccessToken();
         response = await fetch(endpoint, {
           method: 'POST',
           headers: {
@@ -67,6 +69,7 @@ export class VertexClient {
         }
 
         lastError = error;
+        await refreshProxyNow();
         await sleep(retryDelayMs(null, attempt));
         continue;
       }
@@ -95,6 +98,7 @@ export class VertexClient {
       return this.token.accessToken;
     }
 
+    await refreshProxyIfNeeded();
     const assertion = this.createJwtAssertion(now);
     const response = await fetch(TOKEN_URL, {
       method: 'POST',

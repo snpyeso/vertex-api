@@ -8,14 +8,14 @@ import { createDatabase } from './db.js';
 import { anthropicToGemini, geminiChunkParts as anthropicChunkParts, geminiToAnthropic } from './anthropicGeminiMapper.js';
 import { geminiChunkParts as openAiChunkParts, openAiToGemini, geminiToOpenAi } from './openaiGeminiMapper.js';
 import { VertexClient } from './vertexClient.js';
-import { configureProxy, getCurrentProxyUrl } from './proxy.js';
+import { configureProxy, getCurrentProxyUrl, refreshProxyIfNeeded } from './proxy.js';
 import { rememberToolCallSignature, THOUGHT_SIGNATURE_BYPASS } from './thoughtSignatures.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '../..');
 const database = createDatabase(rootDir);
 const config = createRuntimeConfig();
-let proxyUrl = configureProxy();
+configureProxy();
 let vertexClient = null;
 const vertexClients = new Map();
 const app = express();
@@ -26,7 +26,8 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 loadActiveRuntimeConfig();
 
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
+  await refreshProxyIfNeeded();
   res.json({
     ok: true,
     provider: 'vertex',
@@ -34,6 +35,7 @@ app.get('/health', (_req, res) => {
     project_id: config.vertex?.projectId || null,
     location: config.vertex?.location || null,
     proxy: Boolean(getCurrentProxyUrl()),
+    proxy_url: getCurrentProxyUrl() || null,
     require_api_key: config.requireApiKey,
     models: config.vertex?.models || []
   });
@@ -135,7 +137,7 @@ app.get('/config', requireUiAuth, (_req, res) => {
 app.post('/config', requireUiAuth, (req, res, next) => {
   try {
     applyRuntimeConfig(config, req.body);
-    proxyUrl = configureProxy(req.body.proxyUrl);
+    const proxyUrl = configureProxy(req.body.proxyUrl);
     vertexClient = new VertexClient(config.vertex);
     res.json({
       ok: true,
@@ -789,5 +791,4 @@ app.use((error, _req, res, _next) => {
 app.listen(port, host, () => {
   console.log(`Gemini OpenAI proxy listening on http://${host}:${port}`);
   console.log('Open the web UI to enter Vertex AI settings.');
-  if (proxyUrl) console.log(`Using proxy ${proxyUrl}`);
 });
