@@ -108,7 +108,7 @@ async function loadState() {
     profileId: token.profileId || profiles.value[0]?.id || ''
   }));
   configured.value = Boolean(activeProfileId.value);
-  status.value = configured.value ? `Active: ${activeProfile.value?.name || 'Config'}` : 'Not configured';
+  status.value = configured.value ? `Selected: ${activeProfile.value?.name || 'Config'}` : 'Not configured';
   if (configured.value) await loadModels();
 }
 
@@ -166,7 +166,7 @@ async function activateProfile(profileId) {
   profiles.value = payload.state.profiles;
   activeProfileId.value = payload.state.activeProfileId;
   configured.value = true;
-  status.value = `Active: ${activeProfile.value?.name || 'Config'}`;
+  status.value = `Selected: ${activeProfile.value?.name || 'Config'}`;
   await loadModels();
 }
 
@@ -187,7 +187,7 @@ function closeTokenEditor() {
 }
 
 function addTokenRow() {
-  apiTokens.value.push({ id: crypto.randomUUID(), value: '', profileId: profiles.value[0]?.id || '' });
+  apiTokens.value.push({ id: makeId(), value: '', profileId: activeProfileId.value || profiles.value[0]?.id || '' });
 }
 
 function removeTokenRow(index) {
@@ -226,7 +226,13 @@ async function selectLog(logId) {
 }
 
 async function loadModels() {
-  const response = await fetch('/v1/models', { headers: authHeaders() });
+  if (!activeProfileId.value) {
+    models.value = [];
+    model.value = '';
+    return;
+  }
+
+  const response = await fetch(`/app/profiles/${activeProfileId.value}/models`, { credentials: 'include' });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || 'Failed to load models');
   models.value = payload.data.map((item) => item.id);
@@ -243,9 +249,10 @@ async function send() {
   busy.value = true;
 
   try {
-    const response = await fetch('/v1/chat/completions', {
+    const response = await fetch(`/app/profiles/${activeProfileId.value}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: model.value, messages: messages.value })
     });
     const payload = await response.json();
@@ -265,6 +272,10 @@ function authHeaders() {
 
 function normalizedTokens() {
   return apiTokens.value.filter((token) => String(token.value || '').trim());
+}
+
+function makeId() {
+  return globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function formatTime(value) {
@@ -371,7 +382,7 @@ onMounted(checkSession);
         <div class="brand-row">
           <div>
             <input v-model="editingDraft.name" class="profile-name" />
-            <p>{{ editingDraft.id === activeProfileId ? status : 'Inactive' }}</p>
+            <p>{{ editingDraft.id === activeProfileId ? status : 'Saved config' }}</p>
           </div>
           <button type="button" class="ghost-button" @click="closeEditor">Close</button>
         </div>
@@ -405,7 +416,7 @@ onMounted(checkSession);
         <div class="modal-actions">
           <button type="button" class="ghost-button" :disabled="!canSave || saving" @click="saveProfile(false)">Save</button>
           <button type="button" :disabled="!canSave || saving" @click="saveProfile(true)">
-            {{ saving ? 'Saving' : 'Save and enable' }}
+            {{ saving ? 'Saving' : 'Save and select' }}
           </button>
         </div>
       </section>
@@ -417,7 +428,7 @@ onMounted(checkSession);
         <div class="brand-row">
           <div>
             <h2>API Tokens</h2>
-            <p>{{ normalizedTokens().length ? 'API access requires any one listed token.' : 'No tokens means API access is open.' }}</p>
+            <p>{{ normalizedTokens().length ? 'Each token routes requests to its selected config.' : 'No tokens means API access is open and uses the first config.' }}</p>
           </div>
           <button type="button" class="ghost-button" @click="closeTokenEditor">Close</button>
         </div>

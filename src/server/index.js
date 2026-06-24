@@ -120,6 +120,55 @@ app.put('/app/tokens', requireUiAuth, (req, res) => {
   res.json({ ok: true, config: publicConfig(config), state: database.getState() });
 });
 
+app.get('/app/profiles/:id/models', requireUiAuth, (req, res, next) => {
+  try {
+    const profile = database.getProfile(req.params.id);
+    if (!profile) {
+      return res.status(404).json({ error: { message: 'Profile not found' } });
+    }
+    res.json({
+      object: 'list',
+      data: profileToRuntimeVertex(profile).models.map((model) => ({
+        id: model,
+        object: 'model',
+        created: 0,
+        owned_by: 'vertex'
+      }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/app/profiles/:id/chat', requireUiAuth, async (req, res, next) => {
+  const abortController = requestAbortController(req, res);
+  try {
+    const profile = database.getProfile(req.params.id);
+    if (!profile) {
+      return res.status(404).json({ error: { message: 'Profile not found' } });
+    }
+
+    const vertex = profileToRuntimeVertex(profile);
+    const model = req.body.model || vertex.models[0];
+    if (!vertex.models.includes(model)) {
+      return res.status(400).json({ error: { message: `Model '${model}' is not configured` } });
+    }
+
+    const overrides = vertex.preferences?.post_body_parameter_overrides?.[model] || {};
+    const vertexBody = openAiToGemini(req.body, overrides);
+    restoreMissingThoughtSignatures(vertexBody);
+    const vertexResponse = await callVertexWithLog(getVertexClient(profile), {
+      endpoint: 'generateContent',
+      model,
+      request: vertexBody,
+      signal: abortController.signal
+    });
+    res.json(geminiToOpenAi(vertexResponse, model));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/app/vertex-logs', requireUiAuth, (_req, res) => {
   res.json({ logs: database.listVertexLogs() });
 });
@@ -651,8 +700,8 @@ function startSseHeartbeat(res, format) {
 }
 
 function loadActiveRuntimeConfig() {
-  const activeProfile = database.getActiveProfile();
-  if (!activeProfile || !isCompleteProfile(activeProfile)) {
+  const fallbackProfile = database.listProfiles().find(isCompleteProfile);
+  if (!fallbackProfile) {
     resetRuntimeConfig(config);
     vertexClient = null;
     return;
@@ -662,9 +711,9 @@ function loadActiveRuntimeConfig() {
   applyRuntimeConfig(config, {
     requireApiKey: tokens.length > 0,
     apiKeys: tokens.map((token) => ({ value: token.value, profileId: token.profileId })),
-    vertex: profileToVertexInput(activeProfile)
+    vertex: profileToVertexInput(fallbackProfile)
   });
-  vertexClient = getVertexClient(activeProfile);
+  vertexClient = getVertexClient(fallbackProfile);
 }
 
 function isCompleteProfile(profile) {
@@ -678,7 +727,7 @@ function isCompleteProfile(profile) {
 function getRequestContext(_req, authorization) {
   assertConfigured(config);
   const profileId = assertApiKey(config, authorization);
-  const profile = profileId ? database.getProfile(profileId) : database.getActiveProfile();
+  const profile = profileId ? database.getProfile(profileId) : database.getDefaultProfile();
   if (!profile) {
     return { vertex: config.vertex, client: vertexClient };
   }

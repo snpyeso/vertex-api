@@ -48,6 +48,10 @@ class AppDatabase {
     return (activeId && this.getProfile(activeId)) || this.listProfiles()[0] || null;
   }
 
+  getDefaultProfile() {
+    return this.listProfiles()[0] || null;
+  }
+
   saveProfile(profile) {
     const now = Date.now();
     const existing = profile.id ? this.getProfile(profile.id) : null;
