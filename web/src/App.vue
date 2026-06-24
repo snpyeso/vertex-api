@@ -20,7 +20,7 @@ const tokenEditorOpen = ref(false);
 const apiTokens = ref([]);
 const model = ref('');
 const models = ref([]);
-const input = ref('Reply exactly: active config works');
+const input = ref('Reply exactly: selected config works');
 const messages = ref([]);
 const busy = ref(false);
 const saving = ref(false);
@@ -29,6 +29,7 @@ const status = ref('Not configured');
 const error = ref('');
 
 const activeProfile = computed(() => profiles.value.find((profile) => profile.id === activeProfileId.value));
+const testProfileLabel = computed(() => activeProfile.value?.name || 'No config selected');
 const baseOrigin = computed(() => window.location.origin);
 const canSave = computed(() =>
   editingDraft.value?.projectId.trim() &&
@@ -108,8 +109,8 @@ async function loadState() {
     profileId: token.profileId || profiles.value[0]?.id || ''
   }));
   configured.value = Boolean(activeProfileId.value);
-  status.value = configured.value ? `Selected: ${activeProfile.value?.name || 'Config'}` : 'Not configured';
-  if (configured.value) await loadModels();
+  updateSelectedStatus();
+  if (configured.value) await loadModels(activeProfileId.value);
 }
 
 function createDraft(base = {}) {
@@ -139,18 +140,23 @@ function closeEditor() {
   editingDraft.value = null;
 }
 
-async function saveProfile(enableAfterSave = false) {
+async function saveProfile() {
   if (!canSave.value) return;
   saving.value = true;
   try {
+    const wasNew = !editingDraft.value.id;
+    const wasSelected = editingDraft.value.id === activeProfileId.value;
     const path = editingDraft.value.id ? `/app/profiles/${editingDraft.value.id}` : '/app/profiles';
     const method = editingDraft.value.id ? 'PUT' : 'POST';
     const payload = await api(path, { method, body: JSON.stringify(editingDraft.value) });
     profiles.value = payload.state.profiles;
-    activeProfileId.value = payload.state.activeProfileId;
     const savedId = payload.profile.id;
-    if (enableAfterSave || !editingDraft.value.id) await activateProfile(savedId);
     editingDraft.value = null;
+    if (wasNew || wasSelected) {
+      await selectProfile(savedId, { force: wasSelected });
+    } else {
+      updateSelectedStatus();
+    }
   } catch (caught) {
     error.value = caught.message;
   } finally {
@@ -159,22 +165,35 @@ async function saveProfile(enableAfterSave = false) {
 }
 
 async function activateProfile(profileId) {
+  await selectProfile(profileId);
+}
+
+async function selectProfile(profileId, options = {}) {
+  if (!profileId || (profileId === activeProfileId.value && !options.force)) return;
+  activeProfileId.value = profileId;
+  configured.value = true;
+  updateSelectedStatus();
+  resetTestWindow();
+
   const payload = await api('/app/active-profile', {
     method: 'POST',
     body: JSON.stringify({ id: profileId })
   });
   profiles.value = payload.state.profiles;
   activeProfileId.value = payload.state.activeProfileId;
-  configured.value = true;
-  status.value = `Selected: ${activeProfile.value?.name || 'Config'}`;
-  await loadModels();
+  configured.value = Boolean(activeProfileId.value);
+  updateSelectedStatus();
+  await loadModels(activeProfileId.value);
 }
 
 async function deleteProfile(profileId) {
   const payload = await api(`/app/profiles/${profileId}`, { method: 'DELETE' });
   profiles.value = payload.state.profiles;
   activeProfileId.value = payload.state.activeProfileId;
-  await loadModels();
+  configured.value = Boolean(activeProfileId.value);
+  updateSelectedStatus();
+  resetTestWindow();
+  await loadModels(activeProfileId.value);
 }
 
 function openTokenEditor() {
@@ -206,7 +225,7 @@ async function saveTokens() {
   const payload = await api('/app/tokens', { method: 'PUT', body: JSON.stringify({ tokens }) });
   apiTokens.value = payload.state.tokens.map((token) => ({ ...token, profileId: token.profileId || profiles.value[0]?.id || '' }));
   tokenEditorOpen.value = false;
-  await loadModels();
+  await loadModels(activeProfileId.value);
 }
 
 async function openLogs() {
@@ -225,16 +244,17 @@ async function selectLog(logId) {
   selectedLog.value = payload.log;
 }
 
-async function loadModels() {
-  if (!activeProfileId.value) {
+async function loadModels(profileId = activeProfileId.value) {
+  if (!profileId) {
     models.value = [];
     model.value = '';
     return;
   }
 
-  const response = await fetch(`/app/profiles/${activeProfileId.value}/models`, { credentials: 'include' });
+  const response = await fetch(`/app/profiles/${profileId}/models`, { credentials: 'include' });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error?.message || 'Failed to load models');
+  if (profileId !== activeProfileId.value) return;
   models.value = payload.data.map((item) => item.id);
   model.value = models.value[0] || '';
 }
@@ -265,17 +285,24 @@ async function send() {
   }
 }
 
-function authHeaders() {
-  const token = normalizedTokens()[0]?.value;
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 function normalizedTokens() {
   return apiTokens.value.filter((token) => String(token.value || '').trim());
 }
 
 function makeId() {
   return globalThis.crypto?.randomUUID?.() || `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function resetTestWindow() {
+  messages.value = [];
+  error.value = '';
+  input.value = 'Reply exactly: selected config works';
+  models.value = [];
+  model.value = '';
+}
+
+function updateSelectedStatus() {
+  status.value = configured.value ? `Selected: ${activeProfile.value?.name || 'Config'}` : 'Not configured';
 }
 
 function formatTime(value) {
@@ -354,7 +381,7 @@ onMounted(checkSession);
 
       <header class="chat-header">
         <label>
-          Model
+          Model - {{ testProfileLabel }}
           <select v-model="model" :disabled="!configured">
             <option v-for="item in models" :key="item" :value="item">{{ item }}</option>
           </select>
@@ -414,10 +441,7 @@ onMounted(checkSession);
         </label>
 
         <div class="modal-actions">
-          <button type="button" class="ghost-button" :disabled="!canSave || saving" @click="saveProfile(false)">Save</button>
-          <button type="button" :disabled="!canSave || saving" @click="saveProfile(true)">
-            {{ saving ? 'Saving' : 'Save and select' }}
-          </button>
+          <button type="button" :disabled="!canSave || saving" @click="saveProfile">{{ saving ? 'Saving' : 'Save' }}</button>
         </div>
       </section>
     </div>
